@@ -176,6 +176,6 @@ int main() {
 
   auto output = surround.forward(images);
   cv::imwrite("surround.jpg", output);
-  printf("hello %d x %d\n", images[0].cols, images[0].rows);
+  printf("hello %d x %d\n", output.cols, output.rows);
   return 0;
 }

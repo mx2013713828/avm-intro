@@ -12,7 +12,7 @@ static gboolean signal_received = FALSE;
 static int frame_count = 0;
 
 // 摄像头参数
-static const char *DEVICE = "/dev/video1";
+static const char *DEVICE = "/dev/video0";
 static const int WIDTH = 1920;
 static const int HEIGHT = 1080;
 static const int FPS = 30;
@@ -154,8 +154,10 @@ static GstRTSPMediaFactory* create_rtsp_factory() {
         "( v4l2src device=%s ! "
         "video/x-raw,format=YUY2,width=%d,height=%d,framerate=%d/1 ! "
         "nvvidconv ! "
-        "video/x-raw(memory:NVMM),format=NV12,width=%d,height=%d,framerate=%d/1 ! "
+        "video/x-raw(memory:NVMM),format=RGBA,width=%d,height=%d,framerate=%d/1 ! "
         "identity name=cuda_hook signal-handoffs=true ! "  // CUDA处理hook点
+        "nvvidconv ! "
+        "video/x-raw(memory:NVMM),format=NV12 ! "
         "nvv4l2h264enc bitrate=8000000 insert-sps-pps=true iframeinterval=30 preset-level=1 ! "
         "h264parse ! "
         "rtph264pay name=pay0 pt=96 config-interval=1 )",
