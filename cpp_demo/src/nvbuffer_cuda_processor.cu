@@ -194,8 +194,9 @@ class Surrounder {
 // --- Global State ---
 
 static Surrounder* g_surrounder = nullptr;
-static uchar4* g_temp_input = nullptr; // Temporary buffer to hold input frame (packed)
-static int process_count = 0; // Moved to global scope for debug printing
+static uchar4* g_temp_input = nullptr; // GPU buffer for input
+static uchar4* g_temp_output = nullptr; // GPU buffer for output
+static int process_count = 0;
 
 // --- NvBuffer Processor Implementation ---
 
@@ -214,6 +215,10 @@ void cuda_cleanup() {
         cudaFree(g_temp_input);
         g_temp_input = nullptr;
     }
+    if (g_temp_output) {
+        cudaFree(g_temp_output);
+        g_temp_output = nullptr;
+    }
 }
 
 bool nvbuffer_cuda_process(GstBuffer *buffer, int width, int height, int brighten_value) {
@@ -224,15 +229,14 @@ bool nvbuffer_cuda_process(GstBuffer *buffer, int width, int height, int brighte
     // Initialize Surrounder on first run
     if (first_run) {
         g_surrounder = new Surrounder();
-        // Load the binary table. Assuming file is in current directory.
-        // Input/Output dimensions match the pipeline resolution (1920x1080)
+        // Load the binary table
         if (g_surrounder->load("surround_view.binary", width, height, 4, width, height)) {
             stitching_enabled = true;
             
-            // Allocate temp buffer (packed RGBA)
             int size = width * height * sizeof(uchar4);
-            if (cudaMalloc(&g_temp_input, size) != cudaSuccess) {
-                printf("Failed to allocate temp buffer. Stitching disabled.\n");
+            if (cudaMalloc(&g_temp_input, size) != cudaSuccess || 
+                cudaMalloc(&g_temp_output, size) != cudaSuccess) {
+                printf("Failed to allocate temp buffers. Stitching disabled.\n");
                 stitching_enabled = false;
             }
         } else {
@@ -249,55 +253,68 @@ bool nvbuffer_cuda_process(GstBuffer *buffer, int width, int height, int brighte
     
     NvBufSurface *surf = (NvBufSurface *)map_info.data;
     
-    // We need to map the surface to access dataPtr if it's not already mapped? 
-    // Actually dataPtr is usually valid for CUDA on Jetson without Map, 
-    // but NvBufSurfaceMap ensures synchronization and validity.
-    // Use NVBUF_MAP_READ_WRITE just in case, though we primarily use dataPtr.
     if (!surf || NvBufSurfaceMap(surf, 0, -1, NVBUF_MAP_READ_WRITE) != 0) {
         gst_buffer_unmap(buffer, &map_info);
         return false;
     }
     
-    // Sync for device (ensure GPU sees latest data)
     NvBufSurfaceSyncForDevice(surf, 0, -1);
     
     NvBufSurfaceParams *params = &surf->surfaceList[0];
-    uchar4* d_surface = (uchar4*)params->dataPtr;
+    // Use mappedAddr (CPU Pointer) for compatibility
+    uchar4* host_surface = (uchar4*)params->mappedAddr.addr[0];
     int pitch = params->pitch;
     
-    if (first_run || process_count % 30 == 0) {
-        printf("[Debug] Surface Layout: %d (0=Pitch, 1=BlockLinear), Pitch: %d, Width: %d, Height: %d\n", 
+    if (process_count % 30 == 0) {
+        printf("[Debug] Surface Layout: %d, Pitch: %d, Width: %d, Height: %d\n", 
                params->layout, pitch, params->width, params->height);
     }
 
-    if (!d_surface) {
+    if (!host_surface) {
         NvBufSurfaceUnMap(surf, 0, -1);
         gst_buffer_unmap(buffer, &map_info);
         return false;
     }
     
-    if (stitching_enabled && g_temp_input) {
-        // 1. Copy input surface (with pitch) to temp buffer (packed)
+    if (stitching_enabled && g_temp_input && g_temp_output) {
+        // 1. Copy Input: Host -> Device (g_temp_input)
+        // Note: host_surface has pitch, g_temp_input is packed
         cudaError_t err = cudaMemcpy2D(g_temp_input, width * sizeof(uchar4), 
-                     d_surface, pitch, 
+                     host_surface, pitch, 
                      width * sizeof(uchar4), height, 
-                     cudaMemcpyDeviceToDevice);
-        if (err != cudaSuccess) printf("Memcpy2D Failed: %s\n", cudaGetErrorString(err));
+                     cudaMemcpyHostToDevice);
         
-        // 2. Prepare inputs (Simulate 4 cameras using the same source)
-        std::vector<uchar4*> inputs(4, g_temp_input);
-        
-        // 3. Run Stitching
-        g_surrounder->process(d_surface, pitch, inputs);
-        
-        err = cudaGetLastError();
-        if (err != cudaSuccess) printf("Kernel Launch Failed: %s\n", cudaGetErrorString(err));
-        
-        cudaDeviceSynchronize();
+        if (err != cudaSuccess) {
+             printf("H2D Memcpy Failed: %s\n", cudaGetErrorString(err));
+        } else {
+            // 2. Prepare inputs (Simulate 4 cameras)
+            std::vector<uchar4*> inputs(4, g_temp_input);
+            
+            // 3. Run Stitching: g_temp_input -> g_temp_output
+            // Output pitch is width * 4 because g_temp_output is packed
+            g_surrounder->process(g_temp_output, width * sizeof(uchar4), inputs);
+            
+            err = cudaGetLastError();
+            if (err != cudaSuccess) printf("Kernel Launch Failed: %s\n", cudaGetErrorString(err));
+            
+            // 4. Copy Output: Device (g_temp_output) -> Host
+            err = cudaMemcpy2D(host_surface, pitch,
+                         g_temp_output, width * sizeof(uchar4),
+                         width * sizeof(uchar4), height,
+                         cudaMemcpyDeviceToHost);
+                         
+            if (err != cudaSuccess) printf("D2H Memcpy Failed: %s\n", cudaGetErrorString(err));
+            
+            cudaDeviceSynchronize();
+        }
     }
     
     // Cleanup
-    NvBufSurfaceSyncForDevice(surf, 0, -1); // Ensure subsequent elements see changes
+    NvBufSurfaceSyncForDevice(surf, 0, -1); // Actually SyncForCpu might be needed if we wrote to CPU? 
+    // But since we used mappedAddr, it's CPU memory. 
+    // NvBufSurfaceSyncForDevice is usually to flush CPU cache to Device. 
+    // Since we wrote to mappedAddr (via cudaMemcpy D2H), we should probably SyncForDevice to let HW encoder see it.
+    
     NvBufSurfaceUnMap(surf, 0, -1);
     gst_buffer_unmap(buffer, &map_info);
     
