@@ -76,16 +76,49 @@ static __global__ void surround_kernel(const float10* table, int w, int h,
   }
 }
 
+// --- Debug Kernel ---
+__global__ void draw_debug_box(uchar4* output, int pitch, int w, int h) {
+    int x = blockIdx.x * blockDim.x + threadIdx.x;
+    int y = blockIdx.y * blockDim.y + threadIdx.y;
+    
+    if (x < 200 && y < 200 && x < w && y < h) {
+        uchar4* pixel = (uchar4*)((char*)output + y * pitch) + x;
+        // Red box
+        *pixel = make_uchar4(255, 0, 0, 255);
+    }
+}
+
 // --- Surrounder Class ---
 
 class Surrounder {
  public:
   ~Surrounder() { destroy(); }
 
-  bool load(const std::string& file, int w, int h, int numcam, int camw, int camh) {
-    FILE* f = fopen(file.c_str(), "rb");
+  bool load(const std::string& filename, int w, int h, int numcam, int camw, int camh) {
+    // Try multiple paths
+    std::vector<std::string> paths = {
+        filename,
+        "../" + filename,
+        "../../" + filename,
+        "cpp_demo/" + filename,
+        "../cpp_demo/" + filename
+    };
+    
+    FILE* f = nullptr;
+    std::string loaded_path;
+    
+    for (const auto& path : paths) {
+        f = fopen(path.c_str(), "rb");
+        if (f) {
+            loaded_path = path;
+            break;
+        }
+    }
+
     if (f == nullptr) {
-      printf("[Surrounder] Failed to load table: %s\n", file.c_str());
+      printf("\033[1;31m[Surrounder] ERROR: Failed to find table file: %s\033[0m\n", filename.c_str());
+      printf("Searched in:\n");
+      for (const auto& path : paths) printf("  - %s\n", path.c_str());
       return false;
     }
 
@@ -95,7 +128,7 @@ class Surrounder {
 
     size_t expected_size = (size_t)w * h * 10 * sizeof(float);
     if (size != expected_size) {
-      printf("[Surrounder] Invalid table file size. Expected %lu, got %lu\n", expected_size, size);
+      printf("\033[1;31m[Surrounder] ERROR: Invalid file size. Expected %lu, got %lu\033[0m\n", expected_size, size);
       fclose(f);
       return false;
     }
@@ -123,7 +156,7 @@ class Surrounder {
     cudaMemcpy(table_, table_host, size, cudaMemcpyHostToDevice);
     delete[] table_host;
     
-    printf("[Surrounder] Loaded successfully. Output: %dx%d, Input: %dx%d\n", w, h, camw, camh);
+    printf("\033[1;32m[Surrounder] Loaded successfully from %s\033[0m\n", loaded_path.c_str());
     return true;
   }
 
@@ -138,6 +171,9 @@ class Surrounder {
       
       surround_kernel<<<grid, block, 0, stream>>>(
           table_, w_, h_, images_ptr, camw_, camh_, output, out_pitch);
+          
+      // Draw debug box to prove we touched the frame
+      draw_debug_box<<<dim3(10, 10), dim3(20, 20), 0, stream>>>(output, out_pitch, w_, h_);
   }
 
  private:
@@ -230,6 +266,11 @@ bool nvbuffer_cuda_process(GstBuffer *buffer, int width, int height, int brighte
     uchar4* d_surface = (uchar4*)params->dataPtr;
     int pitch = params->pitch;
     
+    if (first_run || process_count % 30 == 0) {
+        printf("[Debug] Surface Layout: %d (0=Pitch, 1=BlockLinear), Pitch: %d, Width: %d, Height: %d\n", 
+               params->layout, pitch, params->width, params->height);
+    }
+
     if (!d_surface) {
         NvBufSurfaceUnMap(surf, 0, -1);
         gst_buffer_unmap(buffer, &map_info);
@@ -238,18 +279,20 @@ bool nvbuffer_cuda_process(GstBuffer *buffer, int width, int height, int brighte
     
     if (stitching_enabled && g_temp_input) {
         // 1. Copy input surface (with pitch) to temp buffer (packed)
-        // This temp buffer acts as our "Source Camera" image
-        cudaMemcpy2D(g_temp_input, width * sizeof(uchar4), 
+        cudaError_t err = cudaMemcpy2D(g_temp_input, width * sizeof(uchar4), 
                      d_surface, pitch, 
                      width * sizeof(uchar4), height, 
                      cudaMemcpyDeviceToDevice);
+        if (err != cudaSuccess) printf("Memcpy2D Failed: %s\n", cudaGetErrorString(err));
         
         // 2. Prepare inputs (Simulate 4 cameras using the same source)
         std::vector<uchar4*> inputs(4, g_temp_input);
         
         // 3. Run Stitching
-        // Output goes directly to d_surface (the GStreamer buffer)
         g_surrounder->process(d_surface, pitch, inputs);
+        
+        err = cudaGetLastError();
+        if (err != cudaSuccess) printf("Kernel Launch Failed: %s\n", cudaGetErrorString(err));
         
         cudaDeviceSynchronize();
     }
