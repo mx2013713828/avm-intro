@@ -195,7 +195,7 @@ class Surrounder {
 
 static Surrounder* g_surrounder = nullptr;
 static uchar4* g_temp_input = nullptr; // Temporary buffer to hold input frame (packed)
-static int g_temp_size = 0;
+static int process_count = 0; // Moved to global scope for debug printing
 
 // --- NvBuffer Processor Implementation ---
 
@@ -219,6 +219,7 @@ void cuda_cleanup() {
 bool nvbuffer_cuda_process(GstBuffer *buffer, int width, int height, int brighten_value) {
     static bool first_run = true;
     static bool stitching_enabled = false;
+    process_count++;
     
     // Initialize Surrounder on first run
     if (first_run) {
@@ -233,8 +234,6 @@ bool nvbuffer_cuda_process(GstBuffer *buffer, int width, int height, int brighte
             if (cudaMalloc(&g_temp_input, size) != cudaSuccess) {
                 printf("Failed to allocate temp buffer. Stitching disabled.\n");
                 stitching_enabled = false;
-            } else {
-                g_temp_size = size;
             }
         } else {
             printf("Stitching disabled (Table load failed).\n");
