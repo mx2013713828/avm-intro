@@ -17,6 +17,7 @@
 │   ├── src/          # 源代码
 │   ├── scripts/      # 构建和运行脚本
 │   └── README.md     # 详细文档
+├── stitching/        # 拼接代码（待移植） 
 ├── config/           # 配置文件
 ```
 

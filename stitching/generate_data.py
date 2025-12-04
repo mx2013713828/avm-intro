@@ -22,11 +22,7 @@ def generate_weights():
     # Paths relative to this script (assuming script is in stitching/)
     # But we might run it from project root. Let's handle both.
     
-    # If running from stitching/
-    if os.path.basename(os.getcwd()) == "stitching":
-        base_dir = ".."
-    else:
-        base_dir = "."
+    base_dir = "."
         
     images_dir = os.path.join(base_dir, "images")
     yaml_dir = os.path.join(base_dir, "yaml")
@@ -65,10 +61,8 @@ def generate_weights():
 
 def load_camera_param(camera):
     # Determine base dir
-    if os.path.basename(os.getcwd()) == "stitching":
-        base_dir = ".."
-    else:
-        base_dir = "."
+
+    base_dir = "."
         
     yaml_path = os.path.join(base_dir, "yaml", f"{camera}.yaml")
     
@@ -149,10 +143,8 @@ def generate_binary():
     camera_params = {}
     images = {}
     
-    if os.path.basename(os.getcwd()) == "stitching":
-        base_dir = ".."
-    else:
-        base_dir = "."
+
+    base_dir = "."
         
     for camera in cameras:
         camera_params[camera] = load_camera_param(camera) 
