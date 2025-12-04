@@ -1,0 +1,5 @@
+pycuda
+pyyaml
+PyGObject
+numpy
+opencv-python

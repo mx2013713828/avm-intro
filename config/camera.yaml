@@ -1,0 +1,5 @@
+device: /dev/video1
+width: 1920
+height: 1080
+framerate: 30
+format: NV12
