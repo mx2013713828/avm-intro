@@ -7,23 +7,17 @@
 - 🚀 **零拷贝架构** - 视频数据始终在GPU显存，无CPU回传
 - ⚡ **CUDA实时处理** - 支持自定义CUDA kernel或TensorRT推理
 - 📡 **RTSP推流** - 支持多客户端同时连接
-- 🔧 **双语言实现** - 提供Python和C++两个版本
 - 📦 **开箱即用** - 一键编译运行
 
 ## 📊 项目结构
 
 ```
 .
-├── python_demo/        # Python实现版本
-│   ├── producer/      # 视频采集和CUDA处理
-│   ├── rtsp_server/   # RTSP服务器
-│   └── scripts/       # 运行脚本
 ├── cpp_demo/          # C++实现版本 ⭐推荐
 │   ├── src/          # 源代码
 │   ├── scripts/      # 构建和运行脚本
 │   └── README.md     # 详细文档
 ├── config/           # 配置文件
-└── requirements.txt  # Python依赖
 ```
 
 ## 系统依赖
@@ -43,25 +37,6 @@ sudo apt install -y \
     libgstreamer-plugins-base1.0-dev \
     libegl1-mesa-dev \
     libgles2-mesa-dev
-```
-
-## Python版本
-
-### 安装依赖
-```bash
-pip3 install -r requirements.txt
-```
-
-### 运行
-1. 启动（一键）:
-```bash
-cd python_demo
-bash scripts/run_all.sh
-```
-
-2. 在另一台机器上拉流：
-```bash
-ffplay rtsp://192.168.0.103:8554/live
 ```
 
 ## C++版本 ⭐ 推荐
@@ -128,7 +103,6 @@ V4L2摄像头 → nvvidconv → NVMM → Identity Hook → nvv4l2h264enc → RTS
 - 硬件编码器直接访问显存数据
 
 ### CUDA集成方案
-- **Python版本**: 使用PyCUDA + DMABUF
 - **C++版本**: 使用CUDA External Memory API + Identity Hook
 
 ### 无同步问题
@@ -138,11 +112,6 @@ V4L2摄像头 → nvvidconv → NVMM → Identity Hook → nvv4l2h264enc → RTS
 
 ## 🎓 适用场景
 
-### Python版本适合
-- 快速原型开发
-- 算法验证
-- 学习和实验
-
 ### C++版本适合
 - 生产环境部署
 - 性能敏感应用
@@ -151,7 +120,6 @@ V4L2摄像头 → nvvidconv → NVMM → Identity Hook → nvv4l2h264enc → RTS
 
 ## 🎉 项目状态
 
-- ✅ Python版本 - 功能完整
 - ✅ C++版本 - 功能完整，已优化，生产就绪
 - ✅ 文档完善
 - ✅ 测试通过
