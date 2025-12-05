@@ -1,10 +1,16 @@
-# Jetson RTSP 零拷贝视频处理项目
+# <h1 align="center">Jetson RTSP 零拷贝视频处理项目</p>
+
+<p align="center">
+  <a href="https://bun.com"><img src="https://pic.imgdb.cn/item/65dc5dfc9f345e8d03446103.png" align="center" width="220" height="82"></a>
+</p>
+
+#### <p align = "center">![Static Badge](https://img.shields.io/badge/mayufeng-blue?style=flat&label=Author)![Static Badge](https://img.shields.io/badge/2025/12/01-blue?style=flat&label=CreateTime)![Static Badge](https://img.shields.io/badge/97357473@qq\.com\-blue?style=flat&label=Email)</p>
 
 基于Jetson平台的高性能RTSP流处理项目，实现零拷贝视频处理和CUDA实时加速。
 
 ## ✨ 项目特点
 
-- 🚀 **零拷贝架构** - 视频数据始终在GPU显存，无CPU回传
+- 🚀 **零拷贝架构** - 视频数据始终在GPU显存，无CPU回传（目前为伪零拷贝）
 - ⚡ **CUDA实时处理** - 支持自定义CUDA kernel或TensorRT推理
 - 📡 **RTSP推流** - 支持多客户端同时连接
 - 📦 **开箱即用** - 一键编译运行
@@ -46,7 +52,7 @@ sudo apt install -y \
 - ✅ 性能更高，内存占用更低
 - ✅ 独立可执行文件，易于部署
 - ✅ 统一pipeline架构，无同步问题
-- ✅ Identity Hook技术，优雅的CUDA集成
+- ✅ Identity Hook技术，CUDA集成
 - ✅ 支持多客户端共享
 
 ### 快速开始
@@ -98,10 +104,11 @@ V4L2摄像头 → nvvidconv → NVMM → Identity Hook → nvv4l2h264enc → RTS
 
 ## 🚀 技术亮点
 
-### 零拷贝架构
-- 视频数据从摄像头采集后直接存储在GPU显存（NVMM格式）
-- CUDA处理直接在显存上操作，无需CPU回传
-- 硬件编码器直接访问显存数据
+### 零拷贝架构(目前为伪零拷贝)
+- [x] 使用mappedAddr (CPU 指针) 作为源，cudaMemcpy (HostToDevice) 到 g_temp_input，处理完后，cudaMemcpy (DeviceToHost) 回 mappedAddr。
+- [ ] 视频数据从摄像头采集后直接存储在GPU显存（NVMM格式）
+- [ ] CUDA处理直接在显存上操作，无需CPU回传
+- [ ] 硬件编码器直接访问显存数据
 
 ### CUDA集成方案
 - **C++版本**: 使用CUDA External Memory API + Identity Hook
@@ -121,7 +128,7 @@ V4L2摄像头 → nvvidconv → NVMM → Identity Hook → nvv4l2h264enc → RTS
 
 ## 🎉 项目状态
 
-- ✅ C++版本 - 功能完整，已优化，生产就绪
+- ✅ C++版本 - 推拉功能完整，已优化，生产就绪
 - ✅ 文档完善
 - ✅ 测试通过
 

@@ -36,21 +36,22 @@
 
 ## 📅 开发阶段
 
-### ✅ Phase 0: 单路处理基础 (已完成)
+### ✅ Phase 0: 单路处理基础 
 
 **目标**: 实现单路摄像头的CUDA处理和RTSP推流
 
 **完成项**:
 - [x] 单路V4L2摄像头采集
-- [x] NVMM零拷贝内存管理
 - [x] NvBufSurface API集成
 - [x] CUDA kernel基础处理 (亮度调整)
 - [x] H.264硬件编码
 - [x] RTSP Server推流
 - [x] 性能验证: 30fps @ 1920x1080
+- [ ] NVMM零拷贝内存管理
 
 **经验总结**:
 - NVMM内存需要通过 `NvBufSurfaceMap` 映射
+- 要在 Jetson 上实现真正的零拷贝 (Zero-Copy)，需使用Unified Memory 或者 EGLImage
 - 使用 `cudaMemcpy` 在CPU和GPU间传输数据
 - `identity` element作为CUDA处理hook点
 - 需要正确同步以避免编码器冲突

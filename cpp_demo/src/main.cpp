@@ -4,6 +4,7 @@
 #include <glib.h>
 #include <stdio.h>
 #include <signal.h>
+#include <chrono>
 #include "nvbuffer_cuda_processor.h"
 
 // 全局变量
@@ -97,6 +98,9 @@ static void on_identity_handoff(GstElement *identity, GstBuffer *buffer, gpointe
     // 使用NvBuffer API进行CUDA处理
     bool cuda_processed = false;
     
+    // 计时开始
+    auto start_time = std::chrono::high_resolution_clock::now();
+
     // 直接使用NvBuffer API处理NVMM内存
     if (nvbuffer_cuda_process(buffer, width, height, 80)) {
         cuda_processed = true;
@@ -108,11 +112,15 @@ static void on_identity_handoff(GstElement *identity, GstBuffer *buffer, gpointe
         }
     }
     
+    // 计时结束
+    auto end_time = std::chrono::high_resolution_clock::now();
+    auto duration = std::chrono::duration_cast<std::chrono::microseconds>(end_time - start_time).count();
+
     // 每30帧打印一次统计
     if (frame_count % 30 == 0) {
         if (cuda_success_count > 0) {
-            g_print("✓ Processed %d frames | CUDA: %d success, %d skipped\n", 
-                    frame_count, cuda_success_count, cuda_skip_count);
+            g_print("✓ Processed %d frames | CUDA: %d success, %d skipped | Last Frame Time: %.2f ms\n", 
+                    frame_count, cuda_success_count, cuda_skip_count, duration / 1000.0f);
         } else {
             g_print("⚠ Processed %d frames | CUDA: NOT ACTIVE (all skipped)\n", frame_count);
         }
