@@ -46,15 +46,32 @@
 - [x] CUDA kernel基础处理 (亮度调整)
 - [x] H.264硬件编码
 - [x] RTSP Server推流
-- [x] 性能验证: 30fps @ 1920x1080
-- [ ] NVMM零拷贝内存管理
+- [x] 性能验证: 30fps @ 1920x1080 (当前耗时 ~17ms)
+- [ ] NVMM零拷贝内存管理 (目前为伪零拷贝: Host Copy)
 
 **经验总结**:
 - NVMM内存需要通过 `NvBufSurfaceMap` 映射
 - 要在 Jetson 上实现真正的零拷贝 (Zero-Copy)，需使用Unified Memory 或者 EGLImage
-- 使用 `cudaMemcpy` 在CPU和GPU间传输数据
+- 使用 `cudaMemcpy` 在CPU和GPU间传输数据 (当前方案)
 - `identity` element作为CUDA处理hook点
 - 需要正确同步以避免编码器冲突
+
+### 🚧 Phase 1: 环视拼接算法移植 (进行中)
+**目标**: 将Python版本的拼接算法移植到C++
+
+- [x] 定义 `Surrounder` 类和查表结构
+- [x] 移植 `surround_kernel` CUDA核函数
+- [x] 实现 `surround_view.binary` 加载逻辑
+- [x] 单目模拟四目测试 (分屏效果验证)
+- [ ] 接入真实四路摄像头
+- [ ] 生成真实的拼接参数文件
+
+### 🚀 Phase 2: 性能优化 (待开始)
+**目标**: 优化管线和算法以降低延迟
+
+- [ ] 实现真零拷贝 (EGL Interop)
+- [ ] 优化CUDA Kernel (纹理内存, 向量化读取)
+- [ ] 降低分辨率选项 (720P)
 
 ---
 

@@ -15,122 +15,40 @@
 - 📡 **RTSP推流** - 支持多客户端同时连接
 - 📦 **开箱即用** - 一键编译运行
 
-## 📊 项目结构
+## � 项目结构
 
 ```
 .
-├── cpp_demo/          # C++实现版本 ⭐推荐
-│   ├── src/          # 源代码
-│   ├── scripts/      # 构建和运行脚本
-│   └── README.md     # 详细文档
-├── stitching/        # 拼接代码（待移植） 
-├── config/           # 配置文件
+├── cpp_demo/           # [核心] C++ 高性能实现版本 (Jetson Orin)
+│   ├── src/            # 源代码 (GStreamer + CUDA)
+│   ├── scripts/        # 编译运行脚本
+│   └── README.md       # C++版本详细文档
+├── stitching/          # [算法] Python 环视拼接算法原型
+│   ├── generate_data.py # 离线参数生成工具
+│   └── cuda.cu         # CUDA核函数原型
+├── config/             # 配置文件
+└── README.md           # 项目总览
 ```
 
-## 系统依赖
+## 🚀 快速开始
 
-```bash
-sudo apt update
-sudo apt install -y \
-    gstreamer1.0-tools \
-    gstreamer1.0-rtsp \
-    gstreamer1.0-plugins-good \
-    gstreamer1.0-plugins-bad \
-    python3-gi \
-    build-essential \
-    cmake \
-    pkg-config \
-    libgstreamer1.0-dev \
-    libgstreamer-plugins-base1.0-dev \
-    libegl1-mesa-dev \
-    libgles2-mesa-dev
-```
+本项目包含两个主要部分，请根据需求选择：
 
-## C++版本 ⭐ 推荐
+### 1. C++ 高性能版本 (推荐)
+适用于 **Jetson Orin** 等嵌入式平台的生产环境部署。
+- **特点**: C++ / GStreamer / CUDA / RTSP
+- **文档**: 请阅读 [cpp_demo/README.md](cpp_demo/README.md)
 
-### 特性
-- ✅ 性能更高，内存占用更低
-- ✅ 独立可执行文件，易于部署
-- ✅ 统一pipeline架构，无同步问题
-- ✅ Identity Hook技术，CUDA集成
-- ✅ 支持多客户端共享
+### 2. Python 算法原型
+适用于算法研究、验证和离线数据生成。
+- **特点**: Python / OpenCV / PyTorch
+- **位置**: `stitching/` 目录
 
-### 快速开始
+## �️ 开发环境
 
-#### 1. 编译
-```bash
-cd cpp_demo
-bash scripts/build.sh
-```
-
-#### 2. 运行
-```bash
-bash scripts/run.sh
-```
-
-#### 3. 拉流测试
-```bash
-# 在另一台机器上
-ffplay rtsp://<JETSON_IP>:8554/live
-
-# 或使用VLC
-vlc rtsp://<JETSON_IP>:8554/live
-```
-
-### 架构说明
-```
-V4L2摄像头 → nvvidconv → NVMM → Identity Hook → nvv4l2h264enc → RTSP
-                         (显存)      ↓ CUDA处理
-```
-
-### 文档
-- `cpp_demo/README.md` - 完整使用文档
-- `cpp_demo/FINAL_VERSION.md` - 详细技术文档
-- `cpp_demo/TROUBLESHOOTING.md` - 问题排查指南
-- `cpp_demo/SUMMARY.md` - 项目总结
-
-## 🎯 版本对比
-
-| 特性 | Python版本 | C++版本 |
-|------|-----------|---------|
-| 性能 | ⭐⭐⭐ | ⭐⭐⭐⭐⭐ |
-| 内存占用 | 较高 | 较低 |
-| 启动速度 | 较慢 | 快 |
-| 易用性 | ⭐⭐⭐⭐⭐ | ⭐⭐⭐⭐ |
-| 部署 | 需要Python环境 | 独立可执行文件 |
-| CUDA集成 | PyCUDA | 原生CUDA |
-| 适用场景 | 快速原型 | 生产部署 |
-| 推荐度 | ⭐⭐⭐ | ⭐⭐⭐⭐⭐ |
-
-## 🚀 技术亮点
-
-### 零拷贝架构(目前为伪零拷贝)
-- [x] 使用mappedAddr (CPU 指针) 作为源，cudaMemcpy (HostToDevice) 到 g_temp_input，处理完后，cudaMemcpy (DeviceToHost) 回 mappedAddr。
-- [ ] 视频数据从摄像头采集后直接存储在GPU显存（NVMM格式）
-- [ ] CUDA处理直接在显存上操作，无需CPU回传
-- [ ] 硬件编码器直接访问显存数据
-
-### CUDA集成方案
-- **C++版本**: 使用CUDA External Memory API + Identity Hook
-
-### 无同步问题
-- 使用统一的GStreamer pipeline
-- Identity element作为CUDA处理hook点
-- 避免传统appsrc/appsink的同步复杂性
-
-## 🎓 适用场景
-
-### C++版本适合
-- 生产环境部署
-- 性能敏感应用
-- 嵌入式系统
-- 长时间运行的服务
-
-## 🎉 项目状态
-
-- ✅ C++版本 - 推拉功能完整，已优化，生产就绪
-- ✅ 文档完善
-- ✅ 测试通过
+- **硬件**: NVIDIA Jetson Orin / AGX Xavier
+- **系统**: Ubuntu 20.04 (JetPack 5.x)
+- **依赖**: CUDA, TensorRT, GStreamer, OpenCV
 
 ## 📝 License
 
