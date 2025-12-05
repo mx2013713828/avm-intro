@@ -15,7 +15,7 @@
 - 📡 **RTSP推流** - 支持多客户端同时连接
 - 📦 **开箱即用** - 一键编译运行
 
-## � 项目结构
+## 📁 项目结构
 
 ```
 .
@@ -44,10 +44,16 @@
 - **特点**: Python / OpenCV / PyTorch
 - **位置**: `stitching/` 目录
 
-## �️ 开发环境
+## 📊 性能指标
+
+| 代码实现 | 耗时 (ms/帧) | CPU 使用率 |延迟(ms)|
+| :------- | :---------- | :--------- |:--------- |
+| C++ & CUDA | 15       | 30%      | 200~250 |
+
+## ⚙️ 开发环境
 
 - **硬件**: NVIDIA Jetson Orin / AGX Xavier
-- **系统**: Ubuntu 20.04 (JetPack 5.x)
+- **系统**: Ubuntu 20.04 (JetPack 5.1)
 - **依赖**: CUDA, TensorRT, GStreamer, OpenCV
 
 ## 📝 License
