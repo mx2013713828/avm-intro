@@ -174,7 +174,21 @@ int main() {
         cv::imread(cv::format("images/%s.png", image_names[i])));
   }
 
+  cudaEvent_t start, end;
+  cudaEventCreate(&start);
+  cudaEventCreate(&end);
+  cudaEventRecord(start, 0);
+
   auto output = surround.forward(images);
+
+  cudaEventRecord(end, 0);
+  cudaEventSynchronize(end);
+  float milliseconds = 0;
+  cudaEventElapsedTime(&milliseconds, start, end);
+  printf("surround.forward took %f ms\n", milliseconds);
+  cudaEventDestroy(start);
+  cudaEventDestroy(end);
+
   cv::imwrite("surround.jpg", output);
   printf("hello %d x %d\n", output.cols, output.rows);
   return 0;
