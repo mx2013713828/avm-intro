@@ -1,77 +1,77 @@
 # C++ Demo Project
 
-This directory contains the high-performance C++ implementation of the surround view system.
+本项目是环视系统的高性能 C++ 实现版本。
 
-## Project Structure
+## 📂 项目结构
 
-- `src/`: Source code
-- `scripts/`: Build and run scripts
-- `docs/`: Documentation
-- `build/`: Build artifacts (created after build)
+- `src/`: 源代码
+- `scripts/`: 编译和运行脚本
+- `docs/`: 详细文档
+- `build/`: 编译产物 (编译后生成)
 
-## Features
+## ✨ 主要特性
 
-- **RTSP Server**: Based on GStreamer RTSP Server.
-- **CUDA Processing**: Custom CUDA kernels for image stitching.
-- **Hardware Encoding**: Uses Jetson hardware encoder (NVENC).
+- **RTSP Server**: 基于 GStreamer RTSP Server 实现。
+- **CUDA Processing**: 自定义 CUDA 核函数实现图像拼接。
+- **Hardware Encoding**: 使用 Jetson 硬件编码器 (NVENC)。
 
-## Current Status & Limitations
+## 🚧 当前状态与限制
 
-### 1. Memory Management (Pseudo Zero-Copy)
-Currently, the project uses a **Host Copy** approach for CUDA processing on Jetson:
-- **Flow**: `NVMM (DMA)` -> `CPU Mapped Address` -> `GPU Global Memory` -> `CUDA Kernel` -> `GPU Global Memory` -> `CPU Mapped Address` -> `NVMM`.
-- **Reason**: Direct access to `NVMM` device pointers (`dataPtr`) in CUDA requires EGL interoperability, which is complex to implement initially. We opted for `mappedAddr` (CPU pointer) + `cudaMemcpy` for stability and compatibility.
-- **Impact**: Introduces extra memory bandwidth consumption (~480MB/s for 1080p@30fps) and latency (~2-4ms).
-- **Future Optimization**: Implement `NvBufSurfaceMapEglImage` for true Zero-Copy.
+### 1. 内存管理 (伪零拷贝)
+目前项目在 Jetson 上使用 **Host Copy** 方式进行 CUDA 处理：
+- **流程**: `NVMM (DMA)` -> `CPU 映射地址` -> `GPU 临时显存` -> `CUDA Kernel` -> `GPU 临时显存` -> `CPU 映射地址` -> `NVMM`。
+- **原因**: 在 CUDA 中直接访问 `NVMM` 设备指针 (`dataPtr`) 需要 EGL 互操作，实现较复杂。为了稳定性和兼容性，我们暂时选用了 `mappedAddr` (CPU 指针) + `cudaMemcpy` 方案。
+- **影响**: 引入了额外的内存带宽消耗 (~480MB/s @ 1080p 30fps) 和延迟 (~2-4ms)。
+- **未来优化**: 实现 `NvBufSurfaceMapEglImage` 以达到真正的零拷贝。
 
-#### Data Flow Comparison
+#### 数据流对比
 
-**Current: Pseudo Zero-Copy (Host Copy)**
+**当前方案: 伪零拷贝 (Host Copy)**
 ```mermaid
 graph LR
-    CAM[Camera] -->|NVMM| SURF(NvBufSurface)
-    SURF -.->|Map| CPU[CPU Address]
-    CPU -->|cudaMemcpy H2D| GPU_IN[GPU Temp Input]
-    GPU_IN -->|Kernel| GPU_OUT[GPU Temp Output]
+    CAM[摄像头] -->|NVMM| SURF(NvBufSurface)
+    SURF -.->|Map| CPU[CPU地址]
+    CPU -->|cudaMemcpy H2D| GPU_IN[GPU临时输入]
+    GPU_IN -->|Kernel| GPU_OUT[GPU临时输出]
     GPU_OUT -->|cudaMemcpy D2H| CPU
     CPU -.->|Sync| SURF
-    SURF -->|NVMM| ENC[Encoder]
+    SURF -->|NVMM| ENC[编码器]
     
     style CPU fill:#f9f,stroke:#333,stroke-width:2px
     style GPU_IN fill:#bbf,stroke:#333,stroke-width:2px
     style GPU_OUT fill:#bbf,stroke:#333,stroke-width:2px
 ```
 
-**Ideal: True Zero-Copy (EGL)**
+**理想方案: 真零拷贝 (EGL)**
 ```mermaid
 graph LR
-    CAM[Camera] -->|NVMM| SURF(NvBufSurface)
-    SURF -.->|EGL Interop| CUDA[CUDA Ptr]
-    CUDA -->|Kernel Read/Write| CUDA
-    SURF -->|NVMM| ENC[Encoder]
+    CAM[摄像头] -->|NVMM| SURF(NvBufSurface)
+    SURF -.->|EGL互操作| CUDA[CUDA指针]
+    CUDA -->|Kernel读写| CUDA
+    SURF -->|NVMM| ENC[编码器]
 
     style CUDA fill:#bbf,stroke:#333,stroke-width:4px
 ```
 
-### 2. Performance
-- **Resolution**: 1920x1080
-- **Frame Rate**: Target 30fps
-- **Processing Time**: ~16-18ms per frame (including H2D/D2H copies and Stitching Kernel).
-- **Latency**: Total pipeline latency is acceptable for real-time monitoring, but the processing stage consumes ~50% of the 33ms frame budget.
+### 2. 性能指标
+- **分辨率**: 1920x1080
+- **帧率**: 目标 30fps
+- **处理耗时**: ~16-18ms / 帧 (包含 H2D/D2H 拷贝和拼接 Kernel)。
+- **延迟**: 整体管线延迟满足实时监控要求，但处理阶段消耗了约 50% 的 33ms 帧预算。
 
-## Usage
+## 🚀 使用方法
 
-1. **Build**:
+1. **编译**:
    ```bash
    bash scripts/build.sh
    ```
 
-2. **Run**:
+2. **运行**:
    ```bash
    bash scripts/run.sh
    ```
 
-3. **View Stream**:
+3. **拉流观看**:
    ```bash
    ffplay rtsp://<JETSON_IP>:8554/live
    ```
