@@ -24,6 +24,35 @@ Currently, the project uses a **Host Copy** approach for CUDA processing on Jets
 - **Impact**: Introduces extra memory bandwidth consumption (~480MB/s for 1080p@30fps) and latency (~2-4ms).
 - **Future Optimization**: Implement `NvBufSurfaceMapEglImage` for true Zero-Copy.
 
+#### Data Flow Comparison
+
+**Current: Pseudo Zero-Copy (Host Copy)**
+```mermaid
+graph LR
+    CAM[Camera] -->|NVMM| SURF(NvBufSurface)
+    SURF -.->|Map| CPU[CPU Address]
+    CPU -->|cudaMemcpy H2D| GPU_IN[GPU Temp Input]
+    GPU_IN -->|Kernel| GPU_OUT[GPU Temp Output]
+    GPU_OUT -->|cudaMemcpy D2H| CPU
+    CPU -.->|Sync| SURF
+    SURF -->|NVMM| ENC[Encoder]
+    
+    style CPU fill:#f9f,stroke:#333,stroke-width:2px
+    style GPU_IN fill:#bbf,stroke:#333,stroke-width:2px
+    style GPU_OUT fill:#bbf,stroke:#333,stroke-width:2px
+```
+
+**Ideal: True Zero-Copy (EGL)**
+```mermaid
+graph LR
+    CAM[Camera] -->|NVMM| SURF(NvBufSurface)
+    SURF -.->|EGL Interop| CUDA[CUDA Ptr]
+    CUDA -->|Kernel Read/Write| CUDA
+    SURF -->|NVMM| ENC[Encoder]
+
+    style CUDA fill:#bbf,stroke:#333,stroke-width:4px
+```
+
 ### 2. Performance
 - **Resolution**: 1920x1080
 - **Frame Rate**: Target 30fps
