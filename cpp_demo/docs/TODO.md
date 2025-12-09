@@ -1,30 +1,37 @@
-# 🎯 四路环视拼接系统 - 开发计划
+# 🎯 环视拼接系统 - 开发计划
 
 ## 📋 项目目标
 
-实现一个基于CUDA的实时四路摄像头环视拼接系统，支持RTSP推流输出。
+实现基于 CUDA 的实时四路摄像头环视拼接系统，支持 RTSP 推流输出。
+系统提供 **两种渲染模式**，可根据应用场景切换：
+
+- **2D 鸟瞰图模式**：传统俯视图，使用单应性矩阵（Homography），性能高、延迟低
+- **3D 碗状渲染模式**：沉浸式 3D 环视，使用 OpenGL ES，支持视角交互
+
+---
 
 ## 🏗️ 系统架构设计
 
+### 2D 模式架构
 ```
 ┌─────────────────────────────────────────────────────────────┐
 │                      四路摄像头输入                          │
 │  Camera 0      Camera 1      Camera 2      Camera 3        │
-│  (前视)        (右视)        (后视)        (左视)           │
+│  (前视)        (后视)        (左视)        (右视)           │
 │    ↓             ↓             ↓             ↓              │
 ├─────────────────────────────────────────────────────────────┤
 │                    V4L2 + nvvidconv                         │
 │              NVMM Buffer (四路独立buffer)                   │
 │    ↓             ↓             ↓             ↓              │
 ├─────────────────────────────────────────────────────────────┤
-│                    CUDA 环视拼接处理                         │
-│  • 畸变校正 (Undistortion)                                  │
-│  • 透视变换 (Perspective Transform)                         │
-│  • 图像融合 (Blending)                                      │
-│  • 鸟瞰图生成 (Bird's Eye View)                             │
+│                  CUDA 2D 拼接处理                           │
+│  • 查表法 (LUT) 快速映射                                    │
+│  • 基于 Homography 的透视变换                               │
+│  • 加权融合 (Alpha Blending)                                │
 │    ↓                                                        │
 ├─────────────────────────────────────────────────────────────┤
 │              拼接后的单路输出 (NVMM)                         │
+│              2048×2048 鸟瞰图                               │
 │    ↓                                                        │
 ├─────────────────────────────────────────────────────────────┤
 │          H.264编码 (nvv4l2h264enc)                          │
@@ -34,288 +41,617 @@
 └─────────────────────────────────────────────────────────────┘
 ```
 
-## 📅 开发阶段
-
-### ✅ Phase 0: 单路处理基础 
-
-**目标**: 实现单路摄像头的CUDA处理和RTSP推流
-
-**完成项**:
-- [x] 单路V4L2摄像头采集
-- [x] NvBufSurface API集成
-- [x] CUDA kernel基础处理 (亮度调整)
-- [x] H.264硬件编码
-- [x] RTSP Server推流
-- [x] 性能验证: 30fps @ 1920x1080 (当前耗时 ~17ms)
-- [ ] NVMM零拷贝内存管理 (目前为伪零拷贝: Host Copy)
-
-**经验总结**:
-- NVMM内存需要通过 `NvBufSurfaceMap` 映射
-- 要在 Jetson 上实现真正的零拷贝 (Zero-Copy)，需使用Unified Memory 或者 EGLImage
-- 使用 `cudaMemcpy` 在CPU和GPU间传输数据 (当前方案)
-- `identity` element作为CUDA处理hook点
-- 需要正确同步以避免编码器冲突
-
-### 🚧 Phase 1: 环视拼接算法移植 (进行中)
-**目标**: 将Python版本的拼接算法移植到C++
-
-- [x] 定义 `Surrounder` 类和查表结构
-- [x] 移植 `surround_kernel` CUDA核函数
-- [x] 实现 `surround_view.binary` 加载逻辑
-- [x] 单目模拟四目测试 (分屏效果验证)
-- [ ] 接入真实四路摄像头
-- [ ] 生成真实的拼接参数文件
-
-### 🚀 Phase 2: 性能优化 (待开始)
-**目标**: 优化管线和算法以降低延迟
-
-- [ ] 实现真零拷贝 (EGL Interop)
-- [ ] 优化CUDA Kernel (纹理内存, 向量化读取)
-- [ ] 降低分辨率选项 (720P)
+### 3D 模式架构
+```
+┌─────────────────────────────────────────────────────────────┐
+│                      四路摄像头输入                          │
+│    ↓             ↓             ↓             ↓              │
+├─────────────────────────────────────────────────────────────┤
+│                    V4L2 + nvvidconv                         │
+│              NVMM Buffer (四路独立buffer)                   │
+│    ↓             ↓             ↓             ↓              │
+├─────────────────────────────────────────────────────────────┤
+│              OpenGL ES 3D 渲染管线                          │
+│  • 3D Bowl Mesh (碗状模型)                                  │
+│  • 相机外参 (R, T) 纹理映射                                 │
+│  • 深度测试 + 插值                                          │
+│  • 可交互视角控制                                           │
+│    ↓                                                        │
+├─────────────────────────────────────────────────────────────┤
+│              渲染后的输出 (FBO)                             │
+│              1920×1080 3D 视图                              │
+│    ↓                                                        │
+├─────────────────────────────────────────────────────────────┤
+│          H.264编码 + RTSP 推流                              │
+└─────────────────────────────────────────────────────────────┘
+```
 
 ---
 
-### 🔄 Phase 1: 四路同步采集
+## 📅 开发阶段
 
-**目标**: 实现四路摄像头的同步采集和独立pipeline管理
+### ✅ Phase 0: 基础设施 (已完成)
+
+**目标**: 建立单路处理和推流基础
+
+**完成项**:
+- [x] 单路 V4L2 摄像头采集
+- [x] NvBufSurface API 集成
+- [x] CUDA kernel 基础处理 (亮度调整)
+- [x] H.264 硬件编码
+- [x] RTSP Server 推流
+- [x] Python 版 2D 拼接算法原型 (`stitching/`)
+  - [x] 相机标定参数加载
+  - [x] 查找表 (LUT) 生成
+  - [x] CUDA 拼接 kernel
+  - [x] 可视化验证
+
+**经验总结**:
+- NVMM 内存需要通过 `NvBufSurfaceMap` 映射
+- 当前使用 `cudaMemcpy` (伪零拷贝)，真零拷贝需 EGL Interop
+- `identity` element 作为 CUDA 处理 hook 点
+- Python 原型验证了算法可行性
+
+---
+
+## 🛣️ 开发路径
+
+项目采用 **双路径并行** 策略：
+- **Path A (2D)**: 优先级高，快速交付实用功能
+- **Path B (3D)**: 高级功能，提升用户体验
+
+---
+
+## 🅰️ Path A: 2D 鸟瞰图模式 (优先)
+
+### 🚧 Phase A1: 算法移植与集成 (进行中)
+
+**目标**: 将 Python 版 2D 拼接算法移植到 C++ 并集成到推流管线
+
+**任务列表**:
+- [x] 定义 `Surrounder` 类和查表结构
+- [x] 移植 `surround_kernel` CUDA 核函数
+- [x] 实现 `surround_view.binary` 加载逻辑
+- [x] 单目模拟四目测试 (分屏效果验证)
+- [ ] **集成到 GStreamer 管线** (当前任务)
+  - [ ] 修改 `main.cpp` 支持四路输入
+  - [ ] 在 `on_identity_handoff` 中调用 `Surrounder::forward()`
+  - [ ] 验证输出正确性
+- [ ] 性能测试与优化
+  - [ ] 测量端到端延迟
+  - [ ] 优化 CUDA kernel (如有必要)
+
+**预期输出**:
+- 单路 RTSP 流输出 2D 拼接后的鸟瞰图
+- 帧率: 30fps @ 1920×1080
+- 延迟: < 200ms
+
+---
+
+## 📷 Phase 2: 统一标定 (待开始)
+
+**目标**: 一次性完成四路摄像头的完整标定，获取所有参数供 2D 和 3D 模式使用
+
+**核心思想**: 
+- 标定一次，参数通用
+- 获取完整的内参 (K, D) 和外参 (R, T)
+- 从外参派生 Homography (H) 用于 2D 模式
+
+### 标定参数关系
+
+```
+完整标定参数
+├── 内参 (K, D)                    ← 相机固有属性
+│   ├── camera_matrix (K)          ← 焦距、主点
+│   └── dist_coeffs (D)            ← 畸变系数
+│
+└── 外参 (R, T)                    ← 相机在世界坐标系中的位姿
+    ├── Rotation (R)               ← 3×3 旋转矩阵
+    └── Translation (T)            ← 3×1 平移向量
+    
+派生参数
+└── Homography (H)                 ← 从 K, R, T 派生，用于 2D 模式
+    └── H = K * [r1, r2, t]        ← 假设地面 Z=0
+```
+
+**关键公式**:
+```
+对于地面点 (X, Y, 0):
+P_img = K * [R | T] * [X, Y, 0, 1]^T
+      = K * [r1, r2, t] * [X, Y, 1]^T
+      = H * [X, Y, 1]^T
+
+其中 r1, r2 是 R 的前两列
+```
+
+---
+
+### 任务列表
+
+#### 2.1 硬件准备
+- [ ] 确认四个摄像头设备路径 (`/dev/video0-3`)
+- [ ] 验证每个摄像头的分辨率和帧率 (建议 1920×1080 @ 30fps)
+- [ ] 测试 USB/CSI 带宽是否足够支持四路同时采集
+- [ ] 确定每路摄像头的物理位置（前/后/左/右）
+- [ ] 准备标定工具
+  - [ ] 棋盘格标定板 (推荐 9×6, 方格尺寸 25mm)
+  - [ ] 地面标定网格 (1m × 1m, 至少 4×4)
+  - [ ] 标定图像采集脚本
+
+---
+
+#### 2.2 相机内参标定
+
+**目标**: 获取每个相机的内参矩阵 (K) 和畸变系数 (D)
+
+**步骤**:
+1. **采集标定图像**
+   - [ ] 每个摄像头采集 20-30 张棋盘格图像
+   - [ ] 覆盖不同角度、距离和位置
+   - [ ] 确保棋盘格清晰可见，无运动模糊
+
+2. **运行标定**
+   - [ ] 使用 OpenCV `calibrateCamera` 函数
+   - [ ] 检查重投影误差 (应 < 0.5 像素)
+   - [ ] 保存内参到 YAML 文件
+
+**标定脚本示例**:
+```python
+import cv2
+import numpy as np
+import glob
+
+# 棋盘格参数
+CHECKERBOARD = (9, 6)
+square_size = 25  # mm
+
+# 准备物体点
+objp = np.zeros((CHECKERBOARD[0] * CHECKERBOARD[1], 3), np.float32)
+objp[:, :2] = np.mgrid[0:CHECKERBOARD[0], 0:CHECKERBOARD[1]].T.reshape(-1, 2)
+objp *= square_size
+
+objpoints = []  # 3D 点
+imgpoints = []  # 2D 点
+
+images = glob.glob('calibration_images/front/*.jpg')
+for fname in images:
+    img = cv2.imread(fname)
+    gray = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
+    ret, corners = cv2.findChessboardCorners(gray, CHECKERBOARD, None)
+    
+    if ret:
+        objpoints.append(objp)
+        imgpoints.append(corners)
+
+# 标定
+ret, K, D, rvecs, tvecs = cv2.calibrateCamera(
+    objpoints, imgpoints, gray.shape[::-1], None, None
+)
+
+print(f"重投影误差: {ret}")
+print(f"内参矩阵 K:\n{K}")
+print(f"畸变系数 D:\n{D}")
+```
+
+**输出格式** (`yaml/front.yaml`):
+```yaml
+camera_matrix: !!opencv-matrix
+   rows: 3
+   cols: 3
+   dt: d
+   data: [fx, 0, cx, 0, fy, cy, 0, 0, 1]
+dist_coeffs: !!opencv-matrix
+   rows: 4
+   cols: 1
+   dt: d
+   data: [k1, k2, p1, p2]
+resolution: [1920, 1080]
+```
+
+---
+
+#### 2.3 相机外参标定
+
+**目标**: 获取每个相机在世界坐标系中的位姿 (R, T)
+
+**方法选择**:
+
+**方案 1: 棋盘格 3D 标定** (推荐，精度高)
+- [ ] 将棋盘格放置在已知的世界坐标位置
+- [ ] 采集四路摄像头同时看到棋盘格的图像
+- [ ] 使用 `cv2.solvePnP` 计算每个相机的 R 和 T
+- [ ] 优点: 精度高，自动化程度高
+- [ ] 缺点: 需要精确放置棋盘格
+
+**方案 2: 地面点标定** (实用，适合车辆)
+- [ ] 在车辆周围地面绘制已知坐标的标记点
+- [ ] 手动标注每个相机图像中的地面点
+- [ ] 使用 `cv2.solvePnP` 计算 R 和 T
+- [ ] 优点: 符合实际应用场景
+- [ ] 缺点: 需要手动标注
+
+**标定脚本示例** (方案 2):
+```python
+import cv2
+import numpy as np
+
+# 世界坐标系定义: 车辆中心为原点，X-右，Y-前，Z-上
+# 地面点 (Z=0)
+world_points = np.array([
+    [0, 200, 0],      # 车前方 2m
+    [200, 200, 0],    # 右前方
+    [200, 0, 0],      # 右侧
+    [200, -200, 0],   # 右后方
+    [0, -200, 0],     # 车后方
+    [-200, -200, 0],  # 左后方
+    [-200, 0, 0],     # 左侧
+    [-200, 200, 0],   # 左前方
+], dtype=np.float32)
+
+# 前视相机图像中对应的像素坐标 (手动标注)
+image_points_front = np.array([
+    [960, 800],   # 对应 world_points[0]
+    [1200, 750],  # 对应 world_points[1]
+    # ... 其他点
+], dtype=np.float32)
+
+# 使用 solvePnP 计算外参
+success, rvec, tvec = cv2.solvePnP(
+    world_points, 
+    image_points_front, 
+    K_front,  # 内参矩阵
+    D_front   # 畸变系数
+)
+
+# 转换为旋转矩阵
+R, _ = cv2.Rodrigues(rvec)
+T = tvec
+
+print(f"旋转矩阵 R:\n{R}")
+print(f"平移向量 T:\n{T}")
+```
+
+**输出格式** (`yaml/front.yaml` 追加):
+```yaml
+# ... 内参部分 ...
+extrinsics:
+  rotation: !!opencv-matrix
+     rows: 3
+     cols: 3
+     dt: f
+     data: [r11, r12, r13, r21, r22, r23, r31, r32, r33]
+  translation: !!opencv-matrix
+     rows: 3
+     cols: 1
+     dt: d
+     data: [tx, ty, tz]
+```
+
+---
+
+#### 2.4 派生 Homography 矩阵 (用于 2D 模式)
+
+**目标**: 从外参 (R, T) 计算地面投影的 Homography 矩阵 (H)
+
+**原理**:
+对于地面点 (Z=0)，投影简化为:
+```
+H = K * [r1, r2, t]
+```
+其中 r1, r2 是 R 的第 1、2 列。
+
+**计算脚本**:
+```python
+import numpy as np
+
+def compute_homography_from_extrinsics(K, R, T):
+    """
+    从内参和外参计算地面 Homography
+    
+    Args:
+        K: 3×3 内参矩阵
+        R: 3×3 旋转矩阵
+        T: 3×1 平移向量
+    
+    Returns:
+        H: 3×3 Homography 矩阵
+    """
+    # 提取 R 的前两列
+    r1 = R[:, 0]
+    r2 = R[:, 1]
+    
+    # 构造 [r1, r2, t]
+    RT = np.column_stack((r1, r2, T.flatten()))
+    
+    # H = K * [r1, r2, t]
+    H = K @ RT
+    
+    # 归一化 (使 H[2,2] = 1)
+    H = H / H[2, 2]
+    
+    return H
+
+# 示例
+H_front = compute_homography_from_extrinsics(K_front, R_front, T_front)
+print(f"Homography 矩阵 H:\n{H_front}")
+```
+
+**输出格式** (`yaml/front.yaml` 追加):
+```yaml
+# ... 内参和外参部分 ...
+project_matrix: !!opencv-matrix
+   rows: 3
+   cols: 3
+   dt: d
+   data: [h11, h12, h13, h21, h22, h23, h31, h32, h33]
+```
+
+---
+
+#### 2.5 生成查找表 (用于 2D 模式)
+
+**目标**: 从 Homography 生成 CUDA 拼接所需的查找表
+
+**步骤**:
+- [ ] 修改 `stitching/generate_data.py` 以支持从 YAML 加载参数
+- [ ] 运行脚本生成 `surround_view.binary`
+- [ ] 可视化验证拼接效果
+- [ ] 将 `.binary` 文件部署到 Jetson
+
+**生成命令**:
+```bash
+cd stitching
+python generate_data.py --config yaml/
+```
+
+---
+
+### 预期输出
+
+**标定参数文件** (`yaml/` 目录):
+```
+yaml/
+├── front.yaml        # 前视相机完整参数
+├── back.yaml         # 后视相机完整参数
+├── left.yaml         # 左视相机完整参数
+└── right.yaml        # 右视相机完整参数
+```
+
+**每个 YAML 文件包含**:
+- ✅ 内参 (camera_matrix, dist_coeffs)
+- ✅ 外参 (rotation, translation)
+- ✅ Homography (project_matrix, 从外参派生)
+- ✅ 分辨率 (resolution)
+
+**查找表文件** (用于 2D 模式):
+- `surround_view.binary` (约 76MB @ 1920×1080 输出)
+
+**标定报告**:
+- 重投影误差统计
+- 外参可视化 (相机位姿 3D 图)
+- 拼接效果预览图
+
+---
+
+## 🅰️ Path A: 2D 鸟瞰图模式 (优先)
+
+### 🚀 Phase A3: 四路采集与推流 (待开始)
+
+**前置条件**: Phase 2 标定完成
+
+**目标**: 实现真实四路摄像头的同步采集和 2D 拼接推流
 
 **任务列表**:
 
-#### 1.1 硬件配置
-- [ ] 确认四个摄像头设备路径 (`/dev/video0-3`)
-- [ ] 验证每个摄像头的分辨率和帧率
-- [ ] 测试USB/CSI带宽是否足够支持四路同时采集
-- [ ] 确定每路摄像头的物理位置（前/后/左/右）
+#### A3.1 多路 Pipeline 架构
+- [ ] 设计四路独立 GStreamer pipeline
+- [ ] 实现 pipeline 同步机制（时间戳对齐）
+- [ ] 创建四路 buffer 管理器
+- [ ] 实现帧同步检测（确保四路帧时间戳一致，误差 < 33ms）
 
-#### 1.2 多路Pipeline架构
-- [ ] 设计四路独立GStreamer pipeline
-- [ ] 实现pipeline同步机制（时间戳对齐）
-- [ ] 创建四路buffer管理器
-- [ ] 实现帧同步检测（确保四路帧时间戳一致）
-
-#### 1.3 代码结构
+**代码结构**:
 ```
-src/
+cpp_demo/src/
 ├── main.cpp                          # 主程序
 ├── camera_manager.h/cpp              # 摄像头管理器
 ├── multi_pipeline.h/cpp              # 多路pipeline管理
 ├── frame_sync.h/cpp                  # 帧同步器
 └── cuda/
-    └── avm_processor.h/cu            # 环视CUDA处理器
+    ├── surrounder.h/cu               # 2D拼接处理器
+    └── nvbuffer_utils.h/cu           # NVMM工具函数
 ```
+
+#### A3.2 集成测试
+- [ ] 四路视频成功同步采集
+- [ ] 2D 拼接输出正确
+- [ ] RTSP 推流稳定
+- [ ] 帧率稳定在 30fps
+- [ ] 端到端延迟 < 200ms
 
 **预期输出**:
-- 四路视频成功同步采集
-- 帧率稳定在30fps
-- 时间戳误差 < 33ms (1帧)
+- 完整的 2D 环视系统
+- RTSP 流地址: `rtsp://<JETSON_IP>:8554/surround_2d`
 
 ---
 
-### 🎨 Phase 2: 相机标定与校正
+### ⚡ Phase A4: 性能优化 (待开始)
 
-**目标**: 实现相机标定和畸变校正
+**目标**: 优化管线和算法以降低延迟和资源占用
 
-#### 2.1 相机标定
-- [ ] 准备棋盘格标定板
-- [ ] 采集每个摄像头的标定图像（20-30张）
-- [ ] 使用OpenCV标定工具获取相机内参
-- [ ] 获取畸变系数（k1, k2, p1, p2, k3）
-- [ ] 保存标定参数到配置文件
-
-**标定参数格式**:
-```yaml
-camera_0:  # 前视
-  intrinsic:
-    fx: 1000.0
-    fy: 1000.0
-    cx: 960.0
-    cy: 540.0
-  distortion:
-    k1: -0.2
-    k2: 0.1
-    p1: 0.0
-    p2: 0.0
-    k3: 0.0
-  resolution: [1920, 1080]
-  position: "front"
-```
-
-#### 2.2 CUDA畸变校正
-- [ ] 实现CUDA畸变校正kernel
-- [ ] 使用look-up table (LUT) 加速
-- [ ] 预计算映射表并上传到GPU
-- [ ] 优化内存访问模式（texture memory）
-- [ ] 性能测试: 目标 < 5ms/帧
-
-**关键技术**:
-```cuda
-// 畸变校正kernel示例
-__global__ void undistort_kernel(
-    unsigned char* dst,
-    const unsigned char* src,
-    const float* map_x,
-    const float* map_y,
-    int width, int height
-);
-```
-
----
-
-### 🗺️ Phase 3: 透视变换与鸟瞰图
-
-**目标**: 将四路图像变换到鸟瞰视角
-
-#### 3.1 地面标定
-- [ ] 在车辆周围绘制标准网格（如1m × 1m）
-- [ ] 采集四路摄像头的地面网格图像
-- [ ] 手动标注关键点（至少4个点/相机）
-- [ ] 计算透视变换矩阵（Homography）
-
-#### 3.2 CUDA透视变换
-- [ ] 实现CUDA透视变换kernel
-- [ ] 支持双线性插值
-- [ ] 优化边界处理
-- [ ] 性能目标: < 3ms/帧/路
-
-**透视变换公式**:
-```
-[x']   [h00 h01 h02]   [x]
-[y'] = [h10 h11 h12] × [y]
-[w']   [h20 h21 h22]   [1]
-
-x_bird = x' / w'
-y_bird = y' / w'
-```
-
-#### 3.3 鸟瞰图布局
-- [ ] 设计输出图像尺寸（如2048×2048）
-- [ ] 定义四路图像在输出中的位置
-- [ ] 计算重叠区域（用于融合）
-- [ ] 可视化调试工具
-
----
-
-### 🌈 Phase 4: 多视图融合
-
-**目标**: 平滑融合四路图像的重叠区域
-
-#### 4.1 融合策略
-- [ ] 实现简单加权融合（alpha blending）
-- [ ] 实现渐变融合（gradient blending）
-- [ ] 实现泊松融合（可选，高级）
-- [ ] 处理亮度差异（直方图匹配）
-
-#### 4.2 CUDA融合kernel
-```cuda
-// 多视图融合kernel
-__global__ void blend_kernel(
-    unsigned char* output,
-    const unsigned char* cam0,
-    const unsigned char* cam1,
-    const unsigned char* cam2,
-    const unsigned char* cam3,
-    const float* weight_maps,
-    int width, int height
-);
-```
-
-#### 4.3 权重图生成
-- [ ] 基于距离的权重计算
-- [ ] 考虑图像质量（清晰度、亮度）
-- [ ] 预计算权重图并上传GPU
-- [ ] 动态权重调整（可选）
-
----
-
-### 🔧 Phase 5: 性能优化
-
-**目标**: 达到实时处理要求（30fps @ 1920x1080输入 → 2048x2048输出）
-
-#### 5.1 内存优化
-- [ ] 使用Pinned Memory加速CPU-GPU传输
-- [ ] 使用CUDA Texture Memory优化随机访问
-- [ ] 实现double buffering避免等待
-- [ ] 减少不必要的内存拷贝
-
-#### 5.2 计算优化
-- [ ] 使用CUDA Streams并发处理
-- [ ] 合并kernel减少启动开销
-- [ ] 优化线程块大小（block/grid configuration）
-- [ ] 使用Shared Memory缓存热点数据
-
-#### 5.3 Pipeline优化
-- [ ] 四路采集并行化
-- [ ] CUDA处理与编码流水线化
-- [ ] 异步处理避免阻塞
+**任务列表**:
+- [ ] 实现真零拷贝 (EGL Interop)
+- [ ] 优化 CUDA Kernel
+  - [ ] 使用 Texture Memory 优化随机访问
+  - [ ] 向量化读取 (uchar4)
+  - [ ] 合并 kernel 减少启动开销
+- [ ] Pipeline 优化
+  - [ ] 使用 CUDA Streams 并发处理
+  - [ ] Double buffering 避免等待
+- [ ] 降低分辨率选项 (720p 模式)
 
 **性能指标**:
 | 阶段 | 目标延迟 | 实际延迟 |
-|------|---------|---------|
+|------|---------|---------| 
 | 四路采集 | < 10ms | TBD |
-| 畸变校正 | < 20ms (4×5ms) | TBD |
-| 透视变换 | < 12ms (4×3ms) | TBD |
-| 图像融合 | < 10ms | TBD |
-| H.264编码 | < 15ms | TBD |
-| **总延迟** | **< 67ms** | **TBD** |
+| CUDA 拼接 | < 20ms | TBD |
+| H.264 编码 | < 15ms | TBD |
+| **总延迟** | **< 50ms** | **TBD** |
 
 ---
 
-### 🚀 Phase 6: 系统集成与测试
+## 🅱️ Path B: 3D 碗状渲染模式 (高级)
 
-**目标**: 集成完整系统并进行全面测试
+### 🎨 Phase B2: 3D Mesh 生成 (待开始)
 
-#### 6.1 功能集成
-- [ ] 集成所有CUDA处理模块
-- [ ] 实现配置文件加载
-- [ ] 添加命令行参数支持
-- [ ] 实现运行时参数调整
+**前置条件**: Phase 2 标定完成 (已有外参 R, T)
 
-#### 6.2 错误处理
-- [ ] 摄像头断线检测与恢复
-- [ ] CUDA错误检测与降级
-- [ ] 编码失败处理
-- [ ] 日志系统完善
+**目标**: 生成碗状 3D 模型用于纹理映射
 
-#### 6.3 测试用例
-- [ ] 单元测试（每个模块）
-- [ ] 集成测试（完整pipeline）
-- [ ] 性能测试（帧率、延迟、CPU/GPU占用）
-- [ ] 压力测试（长时间运行）
-- [ ] 边界测试（摄像头遮挡、光照变化）
+**任务列表**:
+- [ ] 实现 Bowl Mesh 生成算法
+  - [ ] 参考 SokratG/Surround-View 的 `Bowl.cpp`
+  - [ ] 定义碗的几何参数 (半径、高度、曲率)
+- [ ] 计算 Mesh 顶点的 UV 坐标
+  - [ ] 使用外参 (R, T) 将 3D 点投影到各相机
+  - [ ] 根据象限分配相机索引
+- [ ] 生成 Mesh 数据文件
+  - [ ] 顶点坐标 (X, Y, Z)
+  - [ ] UV 坐标 (u, v)
+  - [ ] 相机索引 (cam_id)
+  - [ ] 三角形索引
 
-#### 6.4 文档完善
-- [ ] API文档
-- [ ] 用户手册
-- [ ] 标定指南
-- [ ] 故障排查指南
+**输出格式**:
+```
+surround_view_3d.mesh (二进制)
+- Header: Magic, NumVerts, NumIndices
+- Vertices: float[NumVerts * 3]
+- UVs: float[NumVerts * 2]
+- CamIndices: int[NumVerts]
+- Indices: uint[NumIndices]
+```
 
 ---
 
-## 🛠️ 技术选型
+### 🖼️ Phase B3: OpenGL ES 渲染管线 (待开始)
+
+**目标**: 使用 OpenGL ES 3.2 实现 3D 渲染
+
+**任务列表**:
+
+#### B3.1 EGL 上下文初始化
+- [ ] 创建 Headless EGL Display (无窗口渲染)
+- [ ] 配置 EGL Context (OpenGL ES 3.2)
+- [ ] 创建 FBO (Framebuffer Object) 用于离屏渲染
+
+#### B3.2 Shader 编写
+**Vertex Shader**:
+```glsl
+#version 320 es
+layout(location = 0) in vec3 aPos;
+layout(location = 1) in vec2 aTexCoord;
+layout(location = 2) in int aCamIndex;
+
+uniform mat4 uModel;
+uniform mat4 uView;
+uniform mat4 uProjection;
+
+out vec2 TexCoord;
+flat out int CamIndex;
+
+void main() {
+    gl_Position = uProjection * uView * uModel * vec4(aPos, 1.0);
+    TexCoord = aTexCoord;
+    CamIndex = aCamIndex;
+}
+```
+
+**Fragment Shader**:
+```glsl
+#version 320 es
+precision mediump float;
+
+in vec2 TexCoord;
+flat in int CamIndex;
+
+uniform sampler2D uTextures[4];
+
+out vec4 FragColor;
+
+void main() {
+    if (CamIndex == 0) FragColor = texture(uTextures[0], TexCoord);
+    else if (CamIndex == 1) FragColor = texture(uTextures[1], TexCoord);
+    else if (CamIndex == 2) FragColor = texture(uTextures[2], TexCoord);
+    else if (CamIndex == 3) FragColor = texture(uTextures[3], TexCoord);
+    else FragColor = vec4(0.0, 0.0, 0.0, 1.0);
+}
+```
+
+#### B3.3 渲染循环
+- [ ] 加载 Mesh 数据到 VBO/VAO
+- [ ] 上传四路摄像头纹理到 GPU
+- [ ] 设置 View 和 Projection 矩阵
+- [ ] 渲染到 FBO
+- [ ] 读取 FBO 像素数据到 NVMM Buffer
+- [ ] 送入 H.264 编码器
+
+#### B3.4 NVMM-OpenGL 互操作
+- [ ] 使用 EGLImage 实现 NVMM 和 OpenGL 纹理共享
+- [ ] 避免 CPU-GPU 拷贝
+
+**参考资料**:
+- [Jetson EGLImage Extension](https://docs.nvidia.com/jetson/l4t-multimedia/group__ee__nvbuffering__group.html)
+- [OpenGL ES 3.2 Spec](https://www.khronos.org/registry/OpenGL/specs/es/3.2/es_spec_3.2.pdf)
+
+---
+
+### 🎮 Phase B4: 交互控制 (可选)
+
+**目标**: 支持实时视角调整
+
+**任务列表**:
+- [ ] 实现相机位置控制 (Eye Position)
+- [ ] 实现相机朝向控制 (LookAt Target)
+- [ ] 通过 RTSP 元数据或 HTTP API 接收控制指令
+- [ ] 实时更新 View 矩阵
+
+---
+
+## 🔧 技术选型
 
 ### 核心库
-- **GStreamer 1.x**: 视频pipeline管理
-- **CUDA 11.4**: GPU加速计算
-- **NvBuffer API**: NVMM内存管理
-- **OpenCV** (可选): 标定工具、离线处理
+- **GStreamer 1.x**: 视频 pipeline 管理
+- **CUDA 11.4**: GPU 加速计算 (2D 模式)
+- **OpenGL ES 3.2**: 3D 渲染 (3D 模式)
+- **EGL**: Headless 渲染上下文
+- **NvBuffer API**: NVMM 内存管理
 - **yaml-cpp**: 配置文件解析
 
 ### 硬件要求
-- **平台**: NVIDIA Jetson Orin
-- **摄像头**: 4×USB/CSI摄像头
+- **平台**: NVIDIA Jetson Orin / Xavier
+- **摄像头**: 4×USB/CSI 摄像头 (推荐 960×640 @ 30fps)
 - **内存**: 建议 ≥ 8GB
-- **存储**: ≥ 16GB (用于标定数据)
+- **存储**: ≥ 16GB (用于标定数据和模型)
 
 ---
 
 ## 📊 性能目标
 
+### 2D 模式
 | 指标 | 目标值 |
 |------|--------|
-| 输入分辨率 | 4 × 1920×1080 @ 30fps |
+| 输入分辨率 | 4 × 960×640 @ 30fps |
 | 输出分辨率 | 2048×2048 @ 30fps |
+| 端到端延迟 | < 50ms |
+| GPU 占用率 | < 60% |
+| 功耗 | < 20W |
+
+### 3D 模式
+| 指标 | 目标值 |
+|------|--------|
+| 输入分辨率 | 4 × 960×640 @ 30fps |
+| 输出分辨率 | 1920×1080 @ 30fps |
 | 端到端延迟 | < 100ms |
-| GPU占用率 | < 80% |
+| GPU 占用率 | < 80% |
 | 功耗 | < 25W |
 
 ---
@@ -323,77 +659,119 @@ __global__ void blend_kernel(
 ## 🔍 风险与挑战
 
 ### 技术风险
+
+#### 2D 模式
 1. **多路同步**: 四路摄像头时间戳对齐困难
-   - 缓解: 使用硬件时间戳，容忍小误差
-   
-2. **计算性能**: CUDA处理可能无法达到30fps
-   - 缓解: 降低分辨率或帧率，优化算法
-   
-3. **内存带宽**: 四路视频数据量大
-   - 缓解: 使用NVMM零拷贝，减少传输
+   - **缓解**: 使用硬件时间戳，容忍小误差 (< 1 帧)
+
+2. **标定精度**: Homography 标定误差导致拼接错位
+   - **缓解**: 使用高精度标定板，多次标定取平均
+
+#### 3D 模式
+1. **外参标定**: 从 Homography 恢复外参可能不准确
+   - **缓解**: 使用 3D 标定板 (如 AprilTag 3D) 直接标定外参
+
+2. **OpenGL 性能**: 3D 渲染可能无法达到 30fps
+   - **缓解**: 降低 Mesh 分辨率，优化 Shader
+
+3. **NVMM-OpenGL 互操作**: EGLImage 集成复杂
+   - **缓解**: 先使用 CPU 拷贝验证逻辑，后期优化
 
 ### 硬件风险
-1. **USB带宽限制**: USB 3.0可能无法支持4×1080p
-   - 缓解: 使用CSI接口，或降低部分摄像头分辨率
-   
+1. **USB 带宽限制**: USB 3.0 可能无法支持 4×960p
+   - **缓解**: 使用 CSI 接口，或降低部分摄像头分辨率
+
 2. **摄像头质量**: 不同摄像头色彩不一致
-   - 缓解: 添加颜色校准步骤
+   - **缓解**: 添加颜色校准步骤 (Histogram Matching)
 
 ---
 
 ## 📚 参考资料
 
 ### 环视拼接算法
-- [ ] [Around View Monitor (AVM) System](https://en.wikipedia.org/wiki/Around_view_monitor)
-- [ ] [OpenCV Camera Calibration](https://docs.opencv.org/4.x/dc/dbb/tutorial_py_calibration.html)
-- [ ] [NVIDIA VPI - Perspective Warp](https://docs.nvidia.com/vpi/algorithms.html)
+- [Around View Monitor (AVM) System](https://en.wikipedia.org/wiki/Around_view_monitor)
+- [OpenCV Camera Calibration](https://docs.opencv.org/4.x/dc/dbb/tutorial_py_calibration.html)
+- [SokratG/Surround-View](https://github.com/SokratG/Surround-View) - 3D 碗状渲染参考
 
-### CUDA优化
-- [ ] [CUDA Best Practices Guide](https://docs.nvidia.com/cuda/cuda-c-best-practices-guide/)
-- [ ] [CUDA Programming Guide](https://docs.nvidia.com/cuda/cuda-c-programming-guide/)
+### CUDA 优化
+- [CUDA Best Practices Guide](https://docs.nvidia.com/cuda/cuda-c-best-practices-guide/)
+- [CUDA Programming Guide](https://docs.nvidia.com/cuda/cuda-c-programming-guide/)
 
-### Jetson多媒体
-- [ ] [Jetson Linux Multimedia API](https://docs.nvidia.com/jetson/l4t-multimedia/index.html)
-- [ ] [GStreamer on Jetson](https://developer.ridgerun.com/wiki/index.php/Jetson_Nano/GStreamer)
+### OpenGL ES
+- [OpenGL ES 3.2 Specification](https://www.khronos.org/registry/OpenGL/specs/es/3.2/es_spec_3.2.pdf)
+- [Learn OpenGL ES](https://learnopengl.com/)
 
----
-
-## 🎓 学习曲线
-
-### Phase 1-2 (基础)
-- 熟悉多路pipeline管理
-- 掌握相机标定流程
-- 难度: ⭐⭐
-
-### Phase 3-4 (进阶)
-- 理解透视变换原理
-- 掌握CUDA图像处理
-- 难度: ⭐⭐⭐⭐
-
-### Phase 5-6 (高级)
-- CUDA性能优化
-- 系统级调优
-- 难度: ⭐⭐⭐⭐⭐
+### Jetson 多媒体
+- [Jetson Linux Multimedia API](https://docs.nvidia.com/jetson/l4t-multimedia/index.html)
+- [GStreamer on Jetson](https://developer.ridgerun.com/wiki/index.php/Jetson_Nano/GStreamer)
+- [EGLImage Extension](https://www.khronos.org/registry/EGL/extensions/KHR/EGL_KHR_image.txt)
 
 ---
 
 ## 📝 版本历史
 
-- **v0.1** (当前): 单路CUDA处理和RTSP推流 ✅
-- **v0.2** (计划): 四路同步采集
-- **v0.3** (计划): 畸变校正
-- **v0.4** (计划): 透视变换
-- **v0.5** (计划): 多视图融合
-- **v1.0** (目标): 完整环视系统
+- **v0.1** (已完成): 单路 CUDA 处理和 RTSP 推流 ✅
+- **v0.2** (已完成): Python 版 2D 拼接算法原型 ✅
+- **v0.3** (进行中): C++ 版 2D 拼接算法移植 🚧
+- **v0.4** (计划): 实车标定与四路采集
+- **v0.5** (计划): 2D 模式完整系统
+- **v1.0** (目标): 2D + 3D 双模式系统
 
 ---
 
 ## 💡 未来扩展
 
+### 功能扩展
 - [ ] 支持车道线检测叠加
 - [ ] 支持障碍物检测标注
-- [ ] 支持录像功能
-- [ ] 支持Web界面控制
-- [ ] 支持动态标定
-- [ ] 支持3D鸟瞰图
+- [ ] 支持录像功能 (MP4 文件)
+- [ ] 支持 Web 界面控制
+- [ ] 支持动态标定 (在线校准)
 
+### 算法增强
+- [ ] 多频段融合 (Multi-band Blending)
+- [ ] 泊松融合 (Poisson Blending)
+- [ ] 自动曝光平衡
+- [ ] 运动模糊补偿
+
+---
+
+## 🎓 学习曲线
+
+### Path A (2D 模式)
+- **Phase A1-A2**: 熟悉标定流程和参数格式 - 难度: ⭐⭐
+- **Phase A3**: 多路 pipeline 管理和同步 - 难度: ⭐⭐⭐
+- **Phase A4**: CUDA 性能优化 - 难度: ⭐⭐⭐⭐
+
+### Path B (3D 模式)
+- **Phase B1**: 理解外参标定原理 - 难度: ⭐⭐⭐
+- **Phase B2**: 3D 几何和纹理映射 - 难度: ⭐⭐⭐⭐
+- **Phase B3**: OpenGL ES 渲染管线 - 难度: ⭐⭐⭐⭐⭐
+- **Phase B4**: 系统集成和优化 - 难度: ⭐⭐⭐⭐⭐
+
+---
+
+## 🚦 当前状态
+
+**✅ 已完成**:
+- Phase 0: 基础设施
+- Python 版 2D 拼接算法
+
+**🚧 进行中**:
+- Phase A1: 2D 算法 C++ 移植
+
+**📋 下一步**:
+- Phase A1: 集成到 GStreamer 管线
+- Phase A2: 实车标定
+
+**🎯 短期目标 (1-2 周)**:
+- 完成 Phase A1
+- 开始 Phase A2 硬件准备
+
+**🎯 中期目标 (1-2 月)**:
+- 完成 2D 模式 (Phase A2-A4)
+- 交付可用的 2D 环视系统
+
+**🎯 长期目标 (3-6 月)**:
+- 完成 3D 模式 (Phase B1-B4)
+- 实现双模式切换

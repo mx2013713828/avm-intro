@@ -4,12 +4,29 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Project Overview
 
-This is a Jetson-based RTSP video processing project implementing zero-copy video streaming with CUDA real-time acceleration. The project has two implementations:
+This is a Jetson-based **Around View Monitoring (AVM) System** implementing real-time surround view stitching with CUDA acceleration and RTSP streaming. The project supports **two rendering modes**:
 
-- **C++ Version (cpp_demo/)**: Production-ready, recommended for deployment
-- **Python Version (python_demo/)**: Prototype implementation for rapid development
+- **2D Bird's-Eye View**: Traditional top-down view using Homography matrices (faster, simpler)
+- **3D Bowl Rendering**: Immersive 3D surround view using OpenGL ES (advanced, interactive)
 
-The core architecture captures video from V4L2 cameras, processes frames using CUDA on GPU memory (NVMM), and streams via RTSP with hardware H.264 encoding - all without CPU-GPU memory copies.
+### Current Status
+
+**✅ Completed:**
+- Python prototype for 2D stitching algorithm (`stitching/`)
+- Single-camera CUDA processing and RTSP streaming (`cpp_demo/`)
+- 2D stitching algorithm C++ porting (in progress)
+
+**🚧 In Progress:**
+- Real vehicle 4-camera calibration
+- 2D surround view RTSP streaming
+
+**📋 Planned:**
+- 3D surround view with OpenGL ES rendering
+- Dual-mode system (switchable between 2D and 3D)
+
+### Architecture
+
+The core architecture captures video from V4L2 cameras, processes frames using CUDA on GPU memory (NVMM), and streams via RTSP with hardware H.264 encoding.
 
 ## Build and Run
 
@@ -164,16 +181,22 @@ The build requires:
 
 See `cpp_demo/CMakeLists.txt` for full dependency list.
 
-### Future Development: Multi-Camera AVM
+### Future Development: Dual-Mode AVM System
 
-The project is designed to expand to a 4-camera Around View Monitoring (AVM) system. See `cpp_demo/docs/TODO.md` for the roadmap:
-- Phase 0: Single-camera CUDA processing (completed)
-- Phase 1: 4-camera synchronized capture
-- Phase 2: Camera calibration and distortion correction
-- Phase 3: Perspective transform and bird's-eye view
-- Phase 4: Multi-view fusion
-- Phase 5: Performance optimization
-- Phase 6: System integration
+The project roadmap includes two parallel development paths:
+
+**Path A: 2D Surround View (Priority)**
+1. Real vehicle 4-camera calibration (intrinsics + Homography matrices)
+2. 2D stitching RTSP streaming integration
+3. Performance optimization for real-time processing
+
+**Path B: 3D Surround View (Advanced)**
+1. Camera extrinsics calibration (Rotation + Translation)
+2. 3D bowl mesh generation
+3. OpenGL ES rendering pipeline
+4. Interactive view control
+
+See `cpp_demo/docs/TODO.md` for detailed roadmap.
 
 ### Platform-Specific Notes
 
