@@ -254,62 +254,276 @@ resolution: [1920, 1080]
 
 **目标**: 获取每个相机在世界坐标系中的位姿 (R, T)
 
-**方法选择**:
+**采用方法**: **棋盘格 3D 标定** (精度高，自动化)
 
-**方案 1: 棋盘格 3D 标定** (推荐，精度高)
-- [ ] 将棋盘格放置在已知的世界坐标位置
-- [ ] 采集四路摄像头同时看到棋盘格的图像
-- [ ] 使用 `cv2.solvePnP` 计算每个相机的 R 和 T
-- [ ] 优点: 精度高，自动化程度高
-- [ ] 缺点: 需要精确放置棋盘格
+---
 
-**方案 2: 地面点标定** (实用，适合车辆)
-- [ ] 在车辆周围地面绘制已知坐标的标记点
-- [ ] 手动标注每个相机图像中的地面点
-- [ ] 使用 `cv2.solvePnP` 计算 R 和 T
-- [ ] 优点: 符合实际应用场景
-- [ ] 缺点: 需要手动标注
+**实施步骤**:
 
-**标定脚本示例** (方案 2):
+**Step 1: 准备标定环境**
+- [ ] 使用与内参标定相同的棋盘格 (9×6, 25mm)
+- [ ] 在车辆周围选择 3-5 个标定位置
+  - 位置 1: 车辆正前方 (距离 1.5-2m)
+  - 位置 2: 车辆右前方 (45度角)
+  - 位置 3: 车辆右后方
+  - 位置 4: 车辆左前方
+  - 位置 5: 车辆正后方
+- [ ] 每个位置放置棋盘格，确保至少 2 个相机能同时看到
+- [ ] 使用三脚架或支架固定棋盘格，保持平整
+
+**Step 2: 定义世界坐标系**
+- [ ] 选择车辆中心为世界坐标系原点
+- [ ] 定义坐标轴:
+  - **X 轴**: 车辆右侧方向 (正方向向右)
+  - **Y 轴**: 车辆前进方向 (正方向向前)
+  - **Z 轴**: 垂直向上 (正方向向上)
+- [ ] 测量并记录每个标定位置的棋盘格中心坐标 (X, Y, Z)
+
+**Step 3: 采集标定图像**
+- [ ] 同时采集四路摄像头的图像 (确保时间戳同步)
+- [ ] 每个标定位置采集 3-5 张图像 (轻微调整棋盘格角度)
+- [ ] 确保棋盘格在图像中清晰可见，无运动模糊
+- [ ] 总共采集 15-25 组四路同步图像
+
+**Step 4: 运行标定脚本**
+
+**标定脚本** (`calibration/calibrate_extrinsics.py`):
 ```python
 import cv2
 import numpy as np
+import glob
+import yaml
 
-# 世界坐标系定义: 车辆中心为原点，X-右，Y-前，Z-上
-# 地面点 (Z=0)
-world_points = np.array([
-    [0, 200, 0],      # 车前方 2m
-    [200, 200, 0],    # 右前方
-    [200, 0, 0],      # 右侧
-    [200, -200, 0],   # 右后方
-    [0, -200, 0],     # 车后方
-    [-200, -200, 0],  # 左后方
-    [-200, 0, 0],     # 左侧
-    [-200, 200, 0],   # 左前方
-], dtype=np.float32)
+# 棋盘格参数
+CHECKERBOARD = (9, 6)
+SQUARE_SIZE = 25  # mm
 
-# 前视相机图像中对应的像素坐标 (手动标注)
-image_points_front = np.array([
-    [960, 800],   # 对应 world_points[0]
-    [1200, 750],  # 对应 world_points[1]
-    # ... 其他点
-], dtype=np.float32)
+# 世界坐标系定义
+# 棋盘格位置 (相对于车辆中心，单位: cm)
+BOARD_POSITIONS = {
+    'pos1': np.array([0, 200, 0]),      # 正前方 2m
+    'pos2': np.array([150, 150, 0]),    # 右前方
+    'pos3': np.array([150, -150, 0]),   # 右后方
+    'pos4': np.array([-150, 150, 0]),   # 左前方
+    'pos5': np.array([0, -200, 0]),     # 正后方
+}
 
-# 使用 solvePnP 计算外参
-success, rvec, tvec = cv2.solvePnP(
-    world_points, 
-    image_points_front, 
-    K_front,  # 内参矩阵
-    D_front   # 畸变系数
-)
+def prepare_object_points():
+    """准备棋盘格的 3D 物体点 (相对于棋盘格中心)"""
+    objp = np.zeros((CHECKERBOARD[0] * CHECKERBOARD[1], 3), np.float32)
+    objp[:, :2] = np.mgrid[0:CHECKERBOARD[0], 0:CHECKERBOARD[1]].T.reshape(-1, 2)
+    objp *= SQUARE_SIZE
+    
+    # 将原点移到棋盘格中心
+    objp[:, 0] -= (CHECKERBOARD[0] - 1) * SQUARE_SIZE / 2
+    objp[:, 1] -= (CHECKERBOARD[1] - 1) * SQUARE_SIZE / 2
+    
+    return objp
 
-# 转换为旋转矩阵
-R, _ = cv2.Rodrigues(rvec)
-T = tvec
+def calibrate_camera_extrinsics(camera_name, K, D):
+    """
+    标定单个相机的外参
+    
+    Args:
+        camera_name: 'front', 'back', 'left', 'right'
+        K: 内参矩阵
+        D: 畸变系数
+    
+    Returns:
+        R, T: 旋转矩阵和平移向量
+    """
+    objp_local = prepare_object_points()  # 棋盘格局部坐标
+    
+    world_points = []
+    image_points = []
+    
+    # 遍历所有标定位置
+    for pos_name, board_center in BOARD_POSITIONS.items():
+        images = glob.glob(f'calibration_images/{pos_name}/{camera_name}/*.jpg')
+        
+        for img_path in images:
+            img = cv2.imread(img_path)
+            gray = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
+            
+            # 检测棋盘格角点
+            ret, corners = cv2.findChessboardCorners(gray, CHECKERBOARD, None)
+            
+            if ret:
+                # 亚像素精度优化
+                criteria = (cv2.TERM_CRITERIA_EPS + cv2.TERM_CRITERIA_MAX_ITER, 30, 0.001)
+                corners = cv2.cornerSubPix(gray, corners, (11, 11), (-1, -1), criteria)
+                
+                # 将棋盘格局部坐标转换为世界坐标
+                # 假设棋盘格平行于地面 (Z=0 平面)
+                objp_world = objp_local.copy()
+                objp_world[:, 0] += board_center[0]  # X
+                objp_world[:, 1] += board_center[1]  # Y
+                objp_world[:, 2] += board_center[2]  # Z (通常为 0)
+                
+                world_points.append(objp_world)
+                image_points.append(corners.reshape(-1, 2))
+    
+    if len(world_points) == 0:
+        raise ValueError(f"No valid checkerboard found for {camera_name}")
+    
+    # 将所有点合并
+    world_points = np.vstack(world_points).astype(np.float32)
+    image_points = np.vstack(image_points).astype(np.float32)
+    
+    # 使用 solvePnP 计算外参
+    success, rvec, tvec = cv2.solvePnP(
+        world_points,
+        image_points,
+        K,
+        D,
+        flags=cv2.SOLVEPNP_ITERATIVE
+    )
+    
+    if not success:
+        raise ValueError(f"solvePnP failed for {camera_name}")
+    
+    # 转换为旋转矩阵
+    R, _ = cv2.Rodrigues(rvec)
+    T = tvec
+    
+    # 计算重投影误差
+    projected, _ = cv2.projectPoints(world_points, rvec, tvec, K, D)
+    projected = projected.reshape(-1, 2)
+    error = np.sqrt(np.mean((image_points - projected) ** 2))
+    
+    print(f"{camera_name} 外参标定完成:")
+    print(f"  重投影误差: {error:.3f} 像素")
+    print(f"  使用点数: {len(world_points)}")
+    
+    return R, T, error
 
-print(f"旋转矩阵 R:\n{R}")
-print(f"平移向量 T:\n{T}")
+def save_extrinsics(camera_name, R, T, output_dir='yaml'):
+    """保存外参到 YAML 文件"""
+    yaml_path = f'{output_dir}/{camera_name}.yaml'
+    
+    # 读取现有的 YAML (包含内参)
+    with open(yaml_path, 'r') as f:
+        data = yaml.safe_load(f)
+    
+    # 添加外参
+    data['extrinsics'] = {
+        'rotation': {
+            'rows': 3,
+            'cols': 3,
+            'dt': 'f',
+            'data': R.flatten().tolist()
+        },
+        'translation': {
+            'rows': 3,
+            'cols': 1,
+            'dt': 'd',
+            'data': T.flatten().tolist()
+        }
+    }
+    
+    # 保存
+    with open(yaml_path, 'w') as f:
+        yaml.dump(data, f, default_flow_style=False)
+    
+    print(f"外参已保存到 {yaml_path}")
+
+# 主程序
+if __name__ == "__main__":
+    cameras = ['front', 'back', 'left', 'right']
+    
+    for cam in cameras:
+        # 加载内参
+        yaml_path = f'yaml/{cam}.yaml'
+        fs = cv2.FileStorage(yaml_path, cv2.FILE_STORAGE_READ)
+        K = fs.getNode("camera_matrix").mat()
+        D = fs.getNode("dist_coeffs").mat()
+        fs.release()
+        
+        # 标定外参
+        R, T, error = calibrate_camera_extrinsics(cam, K, D)
+        
+        # 保存
+        save_extrinsics(cam, R, T)
+    
+    print("\n所有相机外参标定完成!")
 ```
+
+**Step 5: 验证标定精度**
+- [ ] 检查重投影误差 (应 < 1.0 像素)
+- [ ] 可视化相机位姿 (3D 坐标系)
+- [ ] 验证相机朝向是否合理
+
+**验证脚本** (`calibration/visualize_extrinsics.py`):
+```python
+import numpy as np
+import matplotlib.pyplot as plt
+from mpl_toolkits.mplot3d import Axes3D
+import cv2
+
+def visualize_camera_poses(yaml_dir='yaml'):
+    """可视化四个相机的位姿"""
+    fig = plt.figure(figsize=(12, 10))
+    ax = fig.add_subplot(111, projection='3d')
+    
+    cameras = ['front', 'back', 'left', 'right']
+    colors = ['red', 'blue', 'green', 'orange']
+    
+    for cam, color in zip(cameras, colors):
+        # 加载外参
+        fs = cv2.FileStorage(f'{yaml_dir}/{cam}.yaml', cv2.FILE_STORAGE_READ)
+        R = fs.getNode("extrinsics").getNode("rotation").mat()
+        T = fs.getNode("extrinsics").getNode("translation").mat()
+        fs.release()
+        
+        # 相机中心在世界坐标系中的位置
+        C = -R.T @ T
+        
+        # 相机朝向 (Z 轴方向)
+        Z_axis = R.T @ np.array([[0], [0], [1]])
+        
+        # 绘制相机位置
+        ax.scatter(C[0], C[1], C[2], c=color, s=100, label=cam)
+        
+        # 绘制相机朝向
+        ax.quiver(C[0], C[1], C[2], 
+                  Z_axis[0], Z_axis[1], Z_axis[2],
+                  length=50, color=color, arrow_length_ratio=0.3)
+    
+    # 绘制车辆 (简化为矩形)
+    car_length = 400  # cm
+    car_width = 180
+    car_corners = np.array([
+        [-car_width/2, -car_length/2, 0],
+        [car_width/2, -car_length/2, 0],
+        [car_width/2, car_length/2, 0],
+        [-car_width/2, car_length/2, 0],
+        [-car_width/2, -car_length/2, 0],
+    ])
+    ax.plot(car_corners[:, 0], car_corners[:, 1], car_corners[:, 2], 'k-', linewidth=2)
+    
+    ax.set_xlabel('X (cm)')
+    ax.set_ylabel('Y (cm)')
+    ax.set_zlabel('Z (cm)')
+    ax.legend()
+    ax.set_title('Camera Extrinsics Visualization')
+    plt.show()
+
+if __name__ == "__main__":
+    visualize_camera_poses()
+```
+
+---
+
+**备选方案**: **地面点标定** (如果棋盘格标定困难)
+
+如果棋盘格放置困难或精度不满足要求，可以使用地面点标定作为备选:
+- 在车辆周围地面绘制已知坐标的标记点 (如 ArUco 标记)
+- 手动标注每个相机图像中的地面点
+- 使用 `cv2.solvePnP` 计算 R 和 T
+
+详细步骤见原 TODO.md 方案 2。
+
+---
 
 **输出格式** (`yaml/front.yaml` 追加):
 ```yaml

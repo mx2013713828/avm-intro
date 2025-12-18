@@ -7,3 +7,6 @@ cpp_demo/docs/DOCS_INDEX.md
 stitching/cuda
 stitching/surround.jpg
 *.pyc
+stitching/synwoodscape/*
+stitching/sample_data/*
+synwoodscape/*
