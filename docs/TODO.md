@@ -113,10 +113,10 @@
 - [x] 移植 `surround_kernel` CUDA 核函数
 - [x] 实现 `surround_view.binary` 加载逻辑
 - [x] 单目模拟四目测试 (分屏效果验证)
-- [ ] **集成到 GStreamer 管线** (当前任务)
+- [x] **集成到 GStreamer 管线** 
   - [ ] 修改 `main.cpp` 支持四路输入
   - [ ] 在 `on_identity_handoff` 中调用 `Surrounder::forward()`
-  - [ ] 验证输出正确性
+  - [ ] 实车验证输出正确性
 - [ ] 性能测试与优化
   - [ ] 测量端到端延迟
   - [ ] 优化 CUDA kernel (如有必要)

@@ -25,7 +25,7 @@
 │   └── README.md       # C++版本详细文档
 ├── 3d_avm_demo/        # [算法] Python 3D环视拼接算法原型
 │   ├── TODO
-├── stitching/          # [算法] Python 环视拼接算法原型
+├── stitching/          # [算法] Python 2D环视拼接算法原型
 │   ├── generate_data.py # 离线参数生成工具
 │   └── cuda.cu         # CUDA核函数原型
 ├── config/             # 配置文件
@@ -64,6 +64,9 @@
 ## 3D AVM 效果示例
 
 ![3D AVM](./3d_avm_demo/woodscape_avm_v27_opt.jpg)
+
+###  TODO 
+[TODO文档](./docs/todo-brief.md)
 
 ## ⚙️ 开发环境
 
