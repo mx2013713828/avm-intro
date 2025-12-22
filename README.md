@@ -23,6 +23,8 @@
 │   ├── src/            # 源代码 (GStreamer + CUDA)
 │   ├── scripts/        # 编译运行脚本
 │   └── README.md       # C++版本详细文档
+├── 3d_avm_demo/        # [算法] Python 3D环视拼接算法原型
+│   ├── TODO
 ├── stitching/          # [算法] Python 环视拼接算法原型
 │   ├── generate_data.py # 离线参数生成工具
 │   └── cuda.cu         # CUDA核函数原型
@@ -52,6 +54,16 @@
 | C++ （拼接）| 150      | 140%      | # | Jetson Orin | 960*640|
 | cuda （拼接）| 10      | 80%      | # | Jetson Orin | 960 *640|
 | cuda （拼接）| 3      | 80%      | # | 3090 | 960 *640|
+
+## 2D AVM 效果示例
+
+![2D AVM](./stitching/surround.jpg)
+
+![2D AVM-LOADER](./stitching/custom_data/result-for-loader.png)
+
+## 3D AVM 效果示例
+
+![3D AVM](./3d_avm_demo/woodscape_avm_v27_opt.jpg)
 
 ## ⚙️ 开发环境
 
