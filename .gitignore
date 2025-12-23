@@ -5,7 +5,6 @@ cpp_demo/docs/PROJECT_STRUCTURE.txt
 cpp_demo/docs/DOCS_INDEX.md
 *.binary
 stitching/cuda
-stitching/surround.jpg
 *.pyc
 stitching/synwoodscape/*
 stitching/sample_data/*
