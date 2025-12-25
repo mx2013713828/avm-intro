@@ -1,28 +1,34 @@
 #ifndef NVBUFFER_CUDA_PROCESSOR_H
 #define NVBUFFER_CUDA_PROCESSOR_H
 
+#include <vector>
 #include <cuda_runtime.h>
-#include <gst/gst.h>
 
-/**
- * 使用NvBuffer API处理NVMM内存中的图像数据
- * @param buffer GStreamer buffer (NVMM格式)
- * @param width 图像宽度
- * @param height 图像高度
- * @param brighten_value 增亮值 (0-255)
- * @return 成功返回true，失败返回false
- */
-bool nvbuffer_cuda_process(GstBuffer *buffer, int width, int height, int brighten_value);
-
-/**
- * 初始化CUDA上下文
- */
+// --- CUDA / Stitching API ---
 bool cuda_init();
-
-/**
- * 清理CUDA资源
- */
 void cuda_cleanup();
 
-#endif // NVBUFFER_CUDA_PROCESSOR_H
+// 加载查找表
+bool stitching_init(const char* bin_file, int out_w, int out_h, int in_w, int in_h);
 
+// 核心拼接函数 (输入输出都在GPU显存中)
+bool stitching_process(uchar4* out_ptr, int out_pitch, const std::vector<uchar4*>& in_ptrs);
+
+// --- GStreamer Specific (Needs GstBuffer, which complicates things in .cu) ---
+// We'll define these in a way that doesn't require gst.h in .cu
+#ifdef __cplusplus
+extern "C" {
+#endif
+
+// Forward declaration if needed, or just handle in .cpp
+struct _GstBuffer;
+typedef struct _GstBuffer GstBuffer;
+
+bool nvbuffer_cuda_process(GstBuffer *buffer, int width, int height, int brighten_value);
+bool nvbuffer_cuda_process_multi(GstBuffer **buffers, int width, int height, GstBuffer *out_buffer);
+
+#ifdef __cplusplus
+}
+#endif
+
+#endif // NVBUFFER_CUDA_PROCESSOR_H
