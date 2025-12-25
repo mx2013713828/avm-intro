@@ -105,21 +105,92 @@ bool stitching_process(uchar4* out_ptr, int out_pitch, const std::vector<uchar4*
     return true;
 }
 
-// --- GStreamer Specific ---
-bool nvbuffer_cuda_process(GstBuffer *buffer, int width, int height, int brighten_value) {
+// --- GStreamer & NVMM Specific Implementation ---
 #ifdef HAVE_JETSON_NVMM
-    // ... logic here ...
+#include <gst/gst.h>
+
+// 单路处理 (预留，暂时未使用)
+bool nvbuffer_cuda_process(GstBuffer *buffer, int width, int height, int brighten_value) {
     return true;
-#else
-    return false;
-#endif
 }
 
+// 多路拼接适配器 (核心桥梁)
+// 职责：将GStreamer的NVMM Buffer解包为CUDA指针，传给核心算法，再封包回去
 bool nvbuffer_cuda_process_multi(GstBuffer **buffers, int width, int height, GstBuffer *out_buffer) {
-#ifdef HAVE_JETSON_NVMM
-    // ... logic here ...
-    return true;
-#else
-    return false;
-#endif
+    if (!buffers || !out_buffer) return false;
+
+    GstMapInfo out_map;
+    std::vector<GstMapInfo> in_maps(4);
+    
+    // 1. 映射输出 Buffer (Write Mode)
+    if (!gst_buffer_map(out_buffer, &out_map, GST_MAP_WRITE)) {
+        printf("Error: Failed to map output buffer\n");
+        return false; 
+    }
+    NvBufSurface *out_surf = (NvBufSurface *)out_map.data;
+    
+    // 必须调用 NvBufSurfaceMap 才能在 GPU 上访问 dataPtr
+    if (NvBufSurfaceMap(out_surf, 0, -1, NVBUF_MAP_READ_WRITE) != 0) {
+        printf("Error: NvBufSurfaceMap failed for output\n");
+        gst_buffer_unmap(out_buffer, &out_map);
+        return false;
+    }
+    // 确保之前的 CPU/GPU 操作已完成
+    NvBufSurfaceSyncForDevice(out_surf, 0, -1);
+    
+    // 获取输出显存地址
+    uchar4* d_out = (uchar4*)out_surf->surfaceList[0].dataPtr;
+    int out_pitch = out_surf->surfaceList[0].pitch;
+
+    // 2. 映射输入 Buffers (Read Mode)
+    std::vector<uchar4*> input_ptrs;
+    bool map_success = true;
+    
+    for (int i = 0; i < 4; i++) {
+        if (!gst_buffer_map(buffers[i], &in_maps[i], GST_MAP_READ)) {
+            printf("Error: Failed to map input buffer %d\n", i);
+            map_success = false;
+            break;
+        }
+        NvBufSurface *surf = (NvBufSurface *)in_maps[i].data;
+        
+        if (NvBufSurfaceMap(surf, 0, -1, NVBUF_MAP_READ) != 0) {
+            printf("Error: NvBufSurfaceMap failed for input %d\n", i);
+            gst_buffer_unmap(buffers[i], &in_maps[i]); // Clean up this failure
+            map_success = false;
+            break;
+        }
+        NvBufSurfaceSyncForDevice(surf, 0, -1);
+        
+        // 注意：这里假设输入是 RGBA 格式。如果是 NV12，需要核函数支持或前置 nvvidconv 转换
+        input_ptrs.push_back((uchar4*)surf->surfaceList[0].dataPtr);
+    }
+
+    bool stitching_ok = false;
+    if (map_success) {
+        // 3. --- 调用核心算法 (通用接口) ---
+        // 这一步实现了真正的 "零拷贝"：核心算法直接操作 NVMM 所在的显存
+        stitching_ok = stitching_process(d_out, out_pitch, input_ptrs);
+    }
+
+    // 4. 清理与解映射 (必须严格执行，否则会导致内存泄漏或死锁)
+    
+    // 清理输入
+    for (int i = 0; i < input_ptrs.size(); i++) { // Only unmap successfully mapped ones
+        NvBufSurface *surf = (NvBufSurface *)in_maps[i].data;
+        NvBufSurfaceUnMap(surf, 0, -1);
+        gst_buffer_unmap(buffers[i], &in_maps[i]);
+    }
+    
+    // 清理输出
+    NvBufSurfaceSyncForDevice(out_surf, 0, -1); // 确保内核执行完毕
+    NvBufSurfaceUnMap(out_surf, 0, -1);
+    gst_buffer_unmap(out_buffer, &out_map);
+
+    return stitching_ok;
 }
+#else
+// x86 存根 (Stubs)
+bool nvbuffer_cuda_process(GstBuffer *buffer, int width, int height, int brighten_value) { return false; }
+bool nvbuffer_cuda_process_multi(GstBuffer **buffers, int width, int height, GstBuffer *out_buffer) { return false; }
+#endif
