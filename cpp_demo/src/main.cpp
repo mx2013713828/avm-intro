@@ -41,6 +41,7 @@ static uchar4* d_out = nullptr;      // Common output buffer
 static std::mutex g_frame_mutex;
 static std::condition_variable g_frame_cv;
 static bool g_has_new_frame = false;
+static std::chrono::high_resolution_clock::time_point g_capture_time;
 
 // 采集管线 (Orin Only)
 static GstElement *g_capture_pipeline = nullptr;
@@ -87,7 +88,7 @@ static void process_simulation_frame() {
     std::chrono::duration<double, std::milli> diff = end - start;
     static int frame_count = 0;
     if (++frame_count % 30 == 0) {
-        printf("Stitching time: %.2f ms\n", diff.count());
+        printf("CUDA Stitching time: %.2f ms\n", diff.count());
     }
 }
 
@@ -157,13 +158,14 @@ static GstFlowReturn on_capture_sample(GstAppSink *appsink, gpointer user_data) 
              std::chrono::duration<double, std::milli> diff = end - start;
              static int frame_count_real = 0;
              if (++frame_count_real % 30 == 0) {
-                 printf("Real-mode Stitching time: %.2f ms\n", diff.count());
+                 printf("Real-mode CUDA Stitching time: %.2f ms\n", diff.count());
              }
              
-             // 唤醒 RTSP 推流线程
+             // 唤醒 RTSP 推流线程，并记录采集开始时间
              {
                  std::lock_guard<std::mutex> lock(g_frame_mutex);
                  g_has_new_frame = true;
+                 g_capture_time = std::chrono::high_resolution_clock::now();
              }
              g_frame_cv.notify_one();
         }
@@ -183,21 +185,24 @@ static GstFlowReturn on_capture_sample(GstAppSink *appsink, gpointer user_data) 
 static void on_rtsp_need_data(GstElement *appsrc, guint unused, gpointer user_data) {
     static GstClockTime timestamp = 0;
 
+    auto e2e_start = std::chrono::high_resolution_clock::now();
+
     // 1. 生成或获取最新帧
     if (is_simulation) {
         process_simulation_frame();
     } else {
         // Real Mode: Wait for `on_capture_sample` to update d_out
-        // std::unique_lock<std::mutex> lock(g_frame_mutex);
-        // g_frame_cv.wait(lock, []{ return g_has_new_frame; });
-        // g_has_new_frame = false;
-        // 目前先留空，等确认 x86 Sim OK 后再填补
+        std::unique_lock<std::mutex> lock(g_frame_mutex);
+        if (g_frame_cv.wait_for(lock, std::chrono::milliseconds(100), []{ return g_has_new_frame; })) {
+            g_has_new_frame = false;
+            e2e_start = g_capture_time; // Start latency from camera capture
+        } else {
+            // Timeout or no frame, push a black frame or just skip? 
+            // For now, let's just use what's in d_out.
+        }
     }
 
     // 2. 将 d_out (GPU) 拷贝回 CPU 发送给 RTSP (x264enc)
-    // 注意：在 Orin 上，理想情况是 d_out 也是 NVMM，直接送给 nvv4l2h264enc。
-    // 目前为了兼容性，我们先回拷。Orin 上虽然有拷贝，但已经是 960x960 的小图，带宽压力不大。
-    
     GstBuffer *buffer = gst_buffer_new_allocate(nullptr, OUT_WIDTH * OUT_HEIGHT * 4, nullptr);
     GstMapInfo map;
     gst_buffer_map(buffer, &map, GST_MAP_WRITE);
@@ -211,6 +216,14 @@ static void on_rtsp_need_data(GstElement *appsrc, guint unused, gpointer user_da
     GstFlowReturn ret;
     g_signal_emit_by_name(appsrc, "push-buffer", buffer, &ret);
     gst_buffer_unref(buffer);
+
+    auto e2e_end = std::chrono::high_resolution_clock::now();
+    std::chrono::duration<double, std::milli> e2e_diff = e2e_end - e2e_start;
+    
+    static int e2e_frame_count = 0;
+    if (++e2e_frame_count % 30 == 0) {
+        printf("End-to-End Latency: %.2f ms\n", e2e_diff.count());
+    }
 }
 
 static void media_configure_cb(GstRTSPMediaFactory *factory, GstRTSPMedia *media, gpointer user_data) {
