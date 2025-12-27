@@ -13,6 +13,10 @@
 #include <opencv2/opencv.hpp>
 #include "nvbuffer_cuda_processor.h"
 
+#ifdef HAVE_JETSON_NVMM
+#include <nvbufsurface.h>
+#endif
+
 // --- 配置参数 ---
 static const char *DEFAULT_DEVICES[4] = {"/dev/video0", "/dev/video1", "/dev/video2", "/dev/video3"};
 static const int IN_WIDTH = 1280;   // ROECS input width
@@ -75,7 +79,16 @@ static void process_simulation_frame() {
     current_frame_idx++;
     if (current_frame_idx > END_FRAME) current_frame_idx = START_FRAME;
 
+    auto start = std::chrono::high_resolution_clock::now();
     stitching_process(d_out, OUT_WIDTH * sizeof(uchar4), input_ptrs);
+    cudaDeviceSynchronize();
+    auto end = std::chrono::high_resolution_clock::now();
+    
+    std::chrono::duration<double, std::milli> diff = end - start;
+    static int frame_count = 0;
+    if (++frame_count % 30 == 0) {
+        printf("Stitching time: %.2f ms\n", diff.count());
+    }
 }
 
 // =========================================================================
@@ -136,7 +149,16 @@ static GstFlowReturn on_capture_sample(GstAppSink *appsink, gpointer user_data) 
              // 这里的 Pitch 是问题。cudaMalloc 的 d_out 是紧凑的吗？
              // stitching_process 接受 out_pitch。
              // 对于 d_out (cudaMalloc), pitch = width * 4。
+             auto start = std::chrono::high_resolution_clock::now();
              stitching_process(d_out, OUT_WIDTH * sizeof(uchar4), input_ptrs);
+             cudaDeviceSynchronize();
+             auto end = std::chrono::high_resolution_clock::now();
+             
+             std::chrono::duration<double, std::milli> diff = end - start;
+             static int frame_count_real = 0;
+             if (++frame_count_real % 30 == 0) {
+                 printf("Real-mode Stitching time: %.2f ms\n", diff.count());
+             }
              
              // 唤醒 RTSP 推流线程
              {
