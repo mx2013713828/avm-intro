@@ -26,7 +26,8 @@ static __device__ __forceinline__ uchar4 blend(uchar4 a, uchar4 b, float w) {
 
 static __global__ void surround_kernel(const float10* table, int w, int h,
                                        ptr4 images, int iw, int ih,
-                                       uchar4* output, int out_pitch) {
+                                       uchar4* output, int out_pitch,
+                                       float3 g0, float3 g1, float3 g2, float3 g3) {
     int ix = blockDim.x * blockIdx.x + threadIdx.x;
     int iy = blockDim.y * blockIdx.y + threadIdx.y;
     if (ix >= w || iy >= h) return;
@@ -44,7 +45,14 @@ static __global__ void surround_kernel(const float10* table, int w, int h,
     if (flag < 4) {
         int x = max(0, min((int)item.x[2 + flag * 2 + 0], iw - 1));
         int y = max(0, min((int)item.x[2 + flag * 2 + 1], ih - 1));
-        *out_pixel = images.v[flag][y * iw + x];
+        uchar4 p = images.v[flag][y * iw + x];
+        float3 g = (flag == 0) ? g0 : (flag == 1 ? g1 : (flag == 2 ? g2 : g3));
+        *out_pixel = make_uchar4(
+            fminf(p.x * g.x, 255.0f),
+            fminf(p.y * g.y, 255.0f),
+            fminf(p.z * g.z, 255.0f),
+            255
+        );
     } else {
         const int idxs[][2] = {{2, 1}, {0, 3}, {0, 1}, {2, 3}};
         int a = idxs[flag - 4][0];
@@ -53,7 +61,16 @@ static __global__ void surround_kernel(const float10* table, int w, int h,
         int ay = max(0, min((int)item.x[2 + a * 2 + 1], ih - 1));
         int bx = max(0, min((int)item.x[2 + b * 2 + 0], iw - 1));
         int by = max(0, min((int)item.x[2 + b * 2 + 1], ih - 1));
-        *out_pixel = blend(images.v[a][ay * iw + ax], images.v[b][by * iw + bx], weight);
+        
+        uchar4 pa = images.v[a][ay * iw + ax];
+        uchar4 pb = images.v[b][by * iw + bx];
+        float3 ga = (a == 0) ? g0 : (a == 1 ? g1 : (a == 2 ? g2 : g3));
+        float3 gb = (b == 0) ? g0 : (b == 1 ? g1 : (b == 2 ? g2 : g3));
+
+        pa = make_uchar4(fminf(pa.x * ga.x, 255.0f), fminf(pa.y * ga.y, 255.0f), fminf(pa.z * ga.z, 255.0f), 255);
+        pb = make_uchar4(fminf(pb.x * gb.x, 255.0f), fminf(pb.y * gb.y, 255.0f), fminf(pb.z * gb.z, 255.0f), 255);
+
+        *out_pixel = blend(pa, pb, weight);
     }
 }
 
@@ -93,15 +110,27 @@ bool stitching_init(const char* bin_file, int out_w, int out_h, int in_w, int in
     return g_surrounder->load(bin_file, out_w, out_h, in_w, in_h);
 }
 
-bool stitching_process(uchar4* out_ptr, int out_pitch, const std::vector<uchar4*>& in_ptrs) {
+bool stitching_process(uchar4* out_ptr, int out_pitch, const std::vector<uchar4*>& in_ptrs, const float* h_gains) {
     if (!g_surrounder || !g_surrounder->table || in_ptrs.size() != 4) return false;
     
     ptr4 images;
     for (int i = 0; i < 4; i++) images.v[i] = in_ptrs[i];
+
+    float3 g[4];
+    for(int i=0; i<4; i++) g[i] = make_float3(1.0f, 1.0f, 1.0f);
     
+    if (h_gains) {
+        for(int i=0; i<4; i++) {
+            g[i] = make_float3(h_gains[i*3+0], h_gains[i*3+1], h_gains[i*3+2]);
+        }
+    }
+
     dim3 block(32, 32);
     dim3 grid((g_surrounder->w + block.x - 1) / block.x, (g_surrounder->h + block.y - 1) / block.y);
-    surround_kernel<<<grid, block>>>(g_surrounder->table, g_surrounder->w, g_surrounder->h, images, g_surrounder->iw, g_surrounder->ih, out_ptr, out_pitch);
+    
+    surround_kernel<<<grid, block>>>(g_surrounder->table, g_surrounder->w, g_surrounder->h,
+                                     images, g_surrounder->iw, g_surrounder->ih,
+                                     out_ptr, out_pitch, g[0], g[1], g[2], g[3]);
     return true;
 }
 

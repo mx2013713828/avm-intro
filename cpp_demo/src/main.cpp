@@ -42,6 +42,7 @@ static std::mutex g_frame_mutex;
 static std::condition_variable g_frame_cv;
 static bool g_has_new_frame = false;
 static std::chrono::high_resolution_clock::time_point g_capture_time;
+static float g_camera_gains[12]; // 4 cameras * 3 channels (B, G, R)
 
 // 采集管线 (Orin Only)
 static GstElement *g_capture_pipeline = nullptr;
@@ -53,6 +54,77 @@ static void signal_handler(int signum) {
 }
 
 // =========================================================================
+// 亮度增益计算 (Luminance Balancing)
+// =========================================================================
+static void update_camera_gains(const std::vector<cv::Mat>& imgs) {
+    if (imgs.size() < 4) return;
+
+    auto get_avg_channels = [](const cv::Mat& img, int x, int y, int w, int h) {
+        cv::Rect roi(x, y, w, h);
+        roi &= cv::Rect(0, 0, img.cols, img.rows);
+        if (roi.width <= 0 || roi.height <= 0) return cv::Scalar(128, 128, 128);
+        return cv::mean(img(roi));
+    };
+
+    auto tune = [](float x) {
+        if (x >= 1.0f) return x * expf((1.0f - x) * 0.5f);
+        else return x * expf((1.0f - x) * 0.8f);
+    };
+
+    // Sampling ROIs (F:0, L:1, B:2, R:3 in our system)
+    // Overlap FR (Front:0, Right:3)
+    cv::Scalar f_r = get_avg_channels(imgs[0], 930, 450, 150, 200);   
+    cv::Scalar r_f = get_avg_channels(imgs[3], 330, 200, 200, 150);  
+    // Overlap RB (Right:3, Back:2)
+    cv::Scalar r_b = get_avg_channels(imgs[3], 330, 730, 200, 150);
+    cv::Scalar b_r = get_avg_channels(imgs[2], 200, 450, 150, 200);
+    // Overlap BL (Back:2, Left:1)
+    cv::Scalar b_l = get_avg_channels(imgs[2], 930, 450, 150, 200); 
+    cv::Scalar l_b = get_avg_channels(imgs[1], 800, 730, 200, 150);
+    // Overlap LF (Left:1, Front:0)
+    cv::Scalar l_f = get_avg_channels(imgs[1], 800, 200, 200, 150);
+    cv::Scalar f_l = get_avg_channels(imgs[0], 200, 450, 150, 200);
+
+    float alpha = 0.05f; // Slightly faster for 3-channel
+
+    for (int c = 0; c < 3; c++) {
+        // Ratios: a=R/F, b=B/R, c=L/B, d=F/L
+        float a = r_f[c] / (f_r[c] + 1e-6f);
+        float b = b_r[c] / (r_b[c] + 1e-6f);
+        float d = l_b[c] / (b_l[c] + 1e-6f); // Wait, naming in code: L-B-R-F. 
+        float e = f_l[c] / (l_f[c] + 1e-6f);
+
+        float t = powf(a * b * d * e, 0.25f);
+        
+        float target_f = tune(t / powf(e / a, 0.5f));
+        float target_r = tune(t / powf(a / b, 0.5f));
+        float target_b = tune(t / powf(b / d, 0.5f));
+        float target_l = tune(t / powf(d / e, 0.5f));
+
+        // Update with IIR and clamping
+        auto update = [&](int cam_idx, float target) {
+            float g = std::max(0.7f, std::min(target, 1.4f)); 
+            g_camera_gains[cam_idx * 3 + c] = (1.0f - alpha) * g_camera_gains[cam_idx * 3 + c] + alpha * g;
+        };
+
+        update(0, target_f);
+        update(3, target_r);
+        update(2, target_b);
+        update(1, target_l);
+    }
+
+    static int log_count = 0;
+    if (++log_count % 5 == 0) {
+        printf("BGR Gains [F:%.2f %.2f %.2f] [L:%.2f %.2f %.2f] [B:%.2f %.2f %.2f] [R:%.2f %.2f %.2f]\n", 
+               g_camera_gains[0], g_camera_gains[1], g_camera_gains[2],
+               g_camera_gains[3], g_camera_gains[4], g_camera_gains[5],
+               g_camera_gains[6], g_camera_gains[7], g_camera_gains[8],
+               g_camera_gains[9], g_camera_gains[10], g_camera_gains[11]);
+        fflush(stdout);
+    }
+}
+
+// =========================================================================
 // 模式 A: 仿真模式 (读取文件)
 // =========================================================================
 static void process_simulation_frame() {
@@ -60,6 +132,7 @@ static void process_simulation_frame() {
     const char* cam_names[] = {"F", "L", "B", "R"};
     std::vector<uchar4*> input_ptrs;
 
+    std::vector<cv::Mat> current_imgs;
     for (int i = 0; i < 4; i++) {
         snprintf(buf, sizeof(buf), "%s/%06d %s.jpg", dataset_path.c_str(), current_frame_idx, cam_names[i]);
         cv::Mat img = cv::imread(buf);
@@ -75,13 +148,20 @@ static void process_simulation_frame() {
         
         cudaMemcpy(d_ins[i], rgba.data, IN_WIDTH * IN_HEIGHT * sizeof(uchar4), cudaMemcpyHostToDevice);
         input_ptrs.push_back(d_ins[i]);
+        current_imgs.push_back(img); // Keep BGR for luminosity sampling
+    }
+
+    // 定期更新增益 (每 5 帧)
+    static int g_count = 0;
+    if (++g_count % 5 == 0) {
+        update_camera_gains(current_imgs);
     }
 
     current_frame_idx++;
     if (current_frame_idx > END_FRAME) current_frame_idx = START_FRAME;
 
     auto start = std::chrono::high_resolution_clock::now();
-    stitching_process(d_out, OUT_WIDTH * sizeof(uchar4), input_ptrs);
+    stitching_process(d_out, OUT_WIDTH * sizeof(uchar4), input_ptrs, g_camera_gains);
     cudaDeviceSynchronize();
     auto end = std::chrono::high_resolution_clock::now();
     
@@ -89,6 +169,7 @@ static void process_simulation_frame() {
     static int frame_count = 0;
     if (++frame_count % 30 == 0) {
         printf("CUDA Stitching time: %.2f ms\n", diff.count());
+        fflush(stdout);
     }
 }
 
@@ -151,7 +232,7 @@ static GstFlowReturn on_capture_sample(GstAppSink *appsink, gpointer user_data) 
              // stitching_process 接受 out_pitch。
              // 对于 d_out (cudaMalloc), pitch = width * 4。
              auto start = std::chrono::high_resolution_clock::now();
-             stitching_process(d_out, OUT_WIDTH * sizeof(uchar4), input_ptrs);
+             stitching_process(d_out, OUT_WIDTH * sizeof(uchar4), input_ptrs, g_camera_gains);
              cudaDeviceSynchronize();
              auto end = std::chrono::high_resolution_clock::now();
              
@@ -223,6 +304,7 @@ static void on_rtsp_need_data(GstElement *appsrc, guint unused, gpointer user_da
     static int e2e_frame_count = 0;
     if (++e2e_frame_count % 30 == 0) {
         printf("End-to-End Latency: %.2f ms\n", e2e_diff.count());
+        fflush(stdout);
     }
 }
 
@@ -263,6 +345,9 @@ int main(int argc, char *argv[]) {
     for (int i = 1; i < argc; i++) {
         if (std::string(argv[i]) == "--sim") is_simulation = TRUE;
     }
+
+    // Initialize Gains to 1.0
+    for(int i=0; i<12; i++) g_camera_gains[i] = 1.0f;
 
     signal(SIGINT, signal_handler);
     gst_init(&argc, &argv);
@@ -341,6 +426,7 @@ int main(int argc, char *argv[]) {
     g_print("Stream URL: rtsp://<IP>:8554/live\n");
     g_print("====================================\n\n");
 
+    g_print("Server attached and starting main loop...\n");
     g_main_loop_run(main_loop);
 
     cuda_cleanup();

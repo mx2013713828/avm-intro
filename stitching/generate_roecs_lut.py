@@ -76,79 +76,101 @@ def generate_lut():
         masks[cam] = z_mask & image_mask
         camera_coords[cam] = pts_2d
 
-    # Blending and region assignment
-    # We'll use radial angle to assign regions
-    angles = np.arctan2(Yw, Xw) # -pi to pi. 0 is Right, pi/2 is Front
+    # --- Blending and Feathering Optimization V2 ---
+    # 1. Calculate Edge Weights (Feathering) for each camera
+    edge_weights = {}
+    for cam in ["front", "back", "left", "right"]:
+        res_w, res_h = params[cam]["res"]
+        coords = camera_coords[cam]
+        # Distance to closest edge
+        dx_edge = np.minimum(coords[..., 0], res_w - coords[..., 0])
+        dy_edge = np.minimum(coords[..., 1], res_h - coords[..., 1])
+        d_edge = np.minimum(dx_edge, dy_edge)
+        
+        # INCREASED Feathering width: 80 pixels for a very soft fade
+        feather_w = 80.0
+        w = np.clip(d_edge / feather_w, 0.0, 1.0)
+        # Smooth step
+        w = 0.5 * (1 - np.cos(np.pi * w))
+        edge_weights[cam] = w * masks[cam]
+
+    # 2. Smooth Angular Blending
+    angles = np.arctan2(Yw, Xw)
+    # INCREASED: 30 degrees for extremely smooth blending
+    blend_width = np.deg2rad(30) 
     
-    # Define blending zones (approx 10 degrees at corners)
-    blend_width = np.deg2rad(10)
-    
+    def get_smooth_weight(angle, target_angle):
+        diff = angle - target_angle
+        # Normalize diff to [-pi, pi]
+        diff = (diff + np.pi) % (2 * np.pi) - np.pi
+        # Map blend zone to [0, 1]
+        t = (diff / blend_width) + 0.5
+        t = np.clip(t, 0.0, 1.0)
+        # Periodic Sine smooth: 0.5 + 0.5 * np.sin(np.pi * (t - 0.5))
+        return 0.5 + 0.5 * np.sin(np.pi * (t - 0.5))
+
+    # Define quadrant masks
     front_mask = (angles >= np.pi/4) & (angles < 3*np.pi/4)
     left_mask = (angles >= 3*np.pi/4) | (angles < -3*np.pi/4)
     back_mask = (angles >= -3*np.pi/4) & (angles < -np.pi/4)
     right_mask = (angles >= -np.pi/4) & (angles < np.pi/4)
-
-    # Simplified blending zones:
-    # 4: back & left (idxs[0] = {2, 1})
-    # 5: front & right (idxs[1] = {0, 3})
-    # 6: front & left (idxs[2] = {0, 1})
-    # 7: back & right (idxs[3] = {2, 3})
     
-    flags = np.full((H, W), -1, dtype=np.float32)
-    weights = np.zeros((H, W), dtype=np.float32)
-    
-    # 1. Assign single camera regions (non-blending zones for now)
-    # We will refine this with actual blend areas
-    
-    def get_blend_weight(angle, target_angle):
-        # target_angle is the boundary: e.g. pi/4
-        diff = angle - target_angle
-        # Normalize diff to [-pi, pi]
-        diff = (diff + np.pi) % (2 * np.pi) - np.pi
-        w = 0.5 + (diff / blend_width) * 0.5
-        return np.clip(w, 0, 1)
-
-    # Intersection lines
-    # FL: 3pi/4
-    # FR: pi/4
-    # BL: -3pi/4
-    # BR: -pi/4
-    
-    # Calculate weights for each transition
-    # 6: Front & Left (PI * 3/4)
-    w_6 = get_blend_weight(angles, np.pi * 0.75)
-    is_6 = (angles > np.pi * 0.75 - blend_width/2) & (angles < np.pi * 0.75 + blend_width/2)
-    
-    # 5: Front & Right (PI * 1/4)
-    w_5 = get_blend_weight(angles, np.pi * 0.25)
+    # Define blend indices
+    # 5: Front & Right (pi/4)
+    # 6: Front & Left (3pi/4)
+    # 4: Back & Left (-3pi/4)
+    # 7: Back & Right (-pi/4)
     is_5 = (angles > np.pi * 0.25 - blend_width/2) & (angles < np.pi * 0.25 + blend_width/2)
-    
-    # 7: Back & Right (-PI * 1/4)
-    w_7 = get_blend_weight(angles, -np.pi * 0.25)
+    is_6 = (angles > np.pi * 0.75 - blend_width/2) & (angles < np.pi * 0.75 + blend_width/2)
+    is_4 = (angles > -np.pi * 0.75 - blend_width/2) & (angles < -np.pi * 0.75 + blend_width/2)
     is_7 = (angles > -np.pi * 0.25 - blend_width/2) & (angles < -np.pi * 0.25 + blend_width/2)
 
-    # 4: Back & Left (-PI * 3/4)
-    w_4 = get_blend_weight(angles, -np.pi * 0.75)
-    is_4 = (angles > -np.pi * 0.75 - blend_width/2) & (angles < -np.pi * 0.75 + blend_width/2)
+    flags = np.full((H, W), -1, dtype=np.float32)
+    weights = np.ones((H, W), dtype=np.float32)
 
-    # Assign regions
+    # Assign single camera regions
     flags[front_mask] = 0
     flags[left_mask] = 1
     flags[back_mask] = 2
     flags[right_mask] = 3
     
-    # Apply blends
-    flags[is_6] = 6
-    weights[is_6] = w_6[is_6]
+    # Assign blend zones and calculate weights
+    # Note: Weight W in LUT means: Final = CamA * (1-W) + CamB * W
     
-    flags[is_5] = 5
-    weights[is_5] = w_5[is_5]
+    # Front(0) & Right(3) -> 5. Boundary at pi/4. W=0 is Right, W=1 is Front
+    # Combined with feathering: W = (W_smooth * E_0) / (W_smooth * E_0 + (1-W_smooth) * E_3)
+    if np.any(is_5):
+        w_s = get_smooth_weight(angles[is_5], np.pi * 0.25)
+        e0 = edge_weights["front"][is_5]
+        e3 = edge_weights["right"][is_5]
+        weights[is_5] = (w_s * e0) / (w_s * e0 + (1-w_s) * e3 + 1e-6)
+        flags[is_5] = 5
     
-    flags[is_7] = 7
-    weights[is_7] = w_7[is_7]
+    # Front(0) & Left(1) -> 6. Boundary at 3pi/4. W=0 is Front, W=1 is Left
+    if np.any(is_6):
+        w_s = get_smooth_weight(angles[is_6], np.pi * 0.75)
+        e0 = edge_weights["front"][is_6]
+        e1 = edge_weights["left"][is_6]
+        weights[is_6] = ((1-w_s) * e0) / ((1-w_s) * e0 + w_s * e1 + 1e-6)
+        # Note: the kernel 'blend' function does: A * weight + B * (1-weight)
+        # For flag 6: A=0(Front), B=1(Left). So weight=1-w_final
+        flags[is_6] = 6
     
-    flags[is_4] = 4
-    weights[is_4] = w_4[is_4]
+    # Back(2) & Left(1) -> 4. Boundary at -3pi/4. W=0 is Left, W=1 is Back
+    if np.any(is_4):
+        w_s = get_smooth_weight(angles[is_4], -np.pi * 0.75)
+        e2 = edge_weights["back"][is_4]
+        e1 = edge_weights["left"][is_4]
+        weights[is_4] = (w_s * e2) / (w_s * e2 + (1-w_s) * e1 + 1e-6)
+        flags[is_4] = 4
+    
+    # Back(2) & Right(3) -> 7. Boundary at -pi/4. W=0 is Back, W=1 is Right
+    if np.any(is_7):
+        w_s = get_smooth_weight(angles[is_7], -np.pi * 0.25)
+        e2 = edge_weights["back"][is_7]
+        e3 = edge_weights["right"][is_7]
+        weights[is_7] = ((1-w_s) * e2) / ((1-w_s) * e2 + w_s * e3 + 1e-6)
+        flags[is_7] = 7
 
     # Final table construction
     # table = [flags, weight_map, c0_x, c0_y, c1_x, c1_y, c2_x, c2_y, c3_x, c3_y] (10 floats)
