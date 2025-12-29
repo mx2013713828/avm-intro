@@ -1,6 +1,6 @@
-# CLAUDE.md
+# GEMINI.md
 
-This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
+This file provides guidance to Gemini Code (gemini.ai/code) when working with code in this repository.
 
 ## Project Overview
 
@@ -13,16 +13,18 @@ This is a Jetson-based **Around View Monitoring (AVM) System** implementing real
 
 **✅ Completed:**
 - Python prototype for 2D stitching algorithm (`stitching/`)
-- Single-camera CUDA processing and RTSP streaming (`cpp_demo/`)
-- 2D stitching algorithm C++ porting (in progress)
+- Unified C++ architecture supporting **Sim (x86)** and **Real (Orin)** modes
+- CUDA acceleration for 1000x1000 BEV stitching with <1ms kernel latency
+- RTSP streaming with integrated AppSrc pipeline
 
-**🚧 In Progress:**
-- Real vehicle 4-camera calibration
-- 2D surround view RTSP streaming
+**🚧 In Progress (Priority Order):**
+1. **Stitching Optimization**: Implementing Edge Feathering and Luminance Balancing to remove hard seams and exposure mismatches.
+2. **True Zero-Copy**: Eliminating GPU-to-CPU host copies by using NVMM-capable encoders on Jetson.
+3. **Dynamic Extrinsic**: Integrating online calibration algorithms for live pose correction and LUT re-generation.
 
-**📋 Planned:**
+**📋 Future Planned:**
 - 3D surround view with OpenGL ES rendering
-- Dual-mode system (switchable between 2D and 3D)
+- Transparent chassis implementation
 
 ### Architecture
 
