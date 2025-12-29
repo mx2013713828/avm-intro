@@ -117,13 +117,13 @@
   - [x] 修改 `main.cpp` 支持双模采集 (Sim/Real)
   - [x] 实现 NVMM Adapter 支持多路 NvBufSurface 处理
   - [x] 实现仿真模式下的 AppSrc 数据循环推流
-- [ ] **视觉质量优化 (Priority 1)**
-  - [ ] **亮度均衡**：在重叠区自动计算各相机亮度增益系数 ($G_L, G_R, G_B$) 并应用于 CUDA 处理。
-  - [ ] **边缘羽化**：修改 LUT 生成算法，在相机有效区域边缘加入基于距离的 alpha 权重平滑。
-  - [ ] **曲线融合**：使用 Sin/Cos 或 Sigmoid 曲线替代线性加权，平滑亮度过渡。
+- [x] **视觉质量优化 (Stitching Optimization)**
+  - [x] **亮度/色彩均衡**：实现了参考 `neozhaoliang` 仓库的闭环 BGR 比例优化算法。
+  - [x] **边缘羽化**：LUT 生成脚本已支持 80px 宽度的边缘柔化。
+  - [x] **平滑融合**：引入 30° 融合带宽与 Sine 权重曲线。
 - [ ] **性能测试与极致优化 (Priority 2)**
-  - [ ] **真·零拷贝实现**：移除 RTSP 推流前的 `cudaMemcpyDeviceToHost`，改用 GPU 编码器直接读取 NVMM。
-  - [ ] **端到端延迟分析**：准确测量从采集到推流的每一阶段耗时。
+  - [ ] **真·零拷贝实现 (Current Focus)**：移除 RTSP 推流前的 `cudaMemcpyDeviceToHost`，改用 GPU 编码器直接读取 NVMM。
+  - [x] **端到端延迟分析**：已在日志中集成采集到推流的全链路耗时统计。
 - [ ] **动态系统演进 (Priority 3)**
   - [ ] **在线标定集成**：支持加载标定算法输出的新外参。
   - [ ] **LUT 实时热更新**：实现无需重启程序的查找表重算与显存重加载逻辑。
@@ -948,6 +948,7 @@ void main() {
 - [ ] 支持录像功能 (MP4 文件)
 - [ ] 支持 Web 界面控制
 - [ ] 支持动态标定 (在线校准)
+- [ ] 透明底盘 (历史帧补偿渲染)
 
 ### 算法增强
 - [ ] 多频段融合 (Multi-band Blending)
@@ -979,7 +980,7 @@ void main() {
 - Python 版 2D 拼接算法
 
 **🚧 进行中**:
-- Phase A1: 2D 算法 C++ 移植
+- Phase A1: 真·零拷贝性能优化 (Zero-copy)
 
 **📋 下一步**:
 - Phase A1: 集成到 GStreamer 管线

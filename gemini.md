@@ -16,15 +16,15 @@ This is a Jetson-based **Around View Monitoring (AVM) System** implementing real
 - Unified C++ architecture supporting **Sim (x86)** and **Real (Orin)** modes
 - CUDA acceleration for 1000x1000 BEV stitching with <1ms kernel latency
 - RTSP streaming with integrated AppSrc pipeline
+- **Stitching Optimization Phase 1**: Implemented 80px edge feathering, 30° wide blending zones, and closed-loop BGR luminance/color balancing.
 
 **🚧 In Progress (Priority Order):**
-1. **Stitching Optimization**: Implementing Edge Feathering and Luminance Balancing to remove hard seams and exposure mismatches.
-2. **True Zero-Copy**: Eliminating GPU-to-CPU host copies by using NVMM-capable encoders on Jetson.
-3. **Dynamic Extrinsic**: Integrating online calibration algorithms for live pose correction and LUT re-generation.
+1. **True Zero-Copy**: Eliminating GPU-to-CPU host copies by using NVMM-capable encoders and shared memory architectures on Jetson.
+2. **Dynamic Extrinsic**: Integrating online calibration algorithms for live pose correction and LUT re-generation.
 
 **📋 Future Planned:**
 - 3D surround view with OpenGL ES rendering
-- Transparent chassis implementation
+- Transparent chassis (Historical frame compensation)
 
 ### Architecture
 
