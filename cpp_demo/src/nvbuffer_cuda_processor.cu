@@ -102,6 +102,10 @@ public:
 static Surrounder* g_surrounder = nullptr;
 
 // --- API Implementation ---
+#ifdef __noinline__
+#undef __noinline__
+#endif
+#include <gst/gst.h>
 bool cuda_init() { return true; }
 void cuda_cleanup() { if (g_surrounder) { if (g_surrounder->table) cudaFree(g_surrounder->table); delete g_surrounder; g_surrounder = nullptr; } }
 
@@ -134,9 +138,88 @@ bool stitching_process(uchar4* out_ptr, int out_pitch, const std::vector<uchar4*
     return true;
 }
 
+// =========================================================================
+// Memory Management Implementation
+// =========================================================================
+
+void* nvbuffer_allocate_output(int w, int h, int* out_pitch) {
+#ifdef HAVE_JETSON_NVMM
+    NvBufSurface *surf = nullptr;
+    NvBufSurfaceCreateParams params;
+    memset(&params, 0, sizeof(params));
+    params.gpuId = 0;
+    params.width = w;
+    params.height = h;
+    params.size = 0;
+    params.isContiguous = true;
+    params.colorFormat = NVBUF_COLOR_FORMAT_RGBA;
+    params.layout = NVBUF_LAYOUT_PITCH;
+    params.memType = NVBUF_MEM_CUDA_DEVICE;
+
+    if (NvBufSurfaceCreate(&surf, 1, &params) != 0) {
+        return nullptr;
+    }
+    *out_pitch = surf->surfaceList[0].pitch;
+    return (void*)surf;
+#else
+    uchar4* d_ptr = nullptr;
+    cudaMalloc(&d_ptr, (size_t)w * h * sizeof(uchar4));
+    *out_pitch = w * sizeof(uchar4);
+    return (void*)d_ptr;
+#endif
+}
+
+void nvbuffer_free_output(void* surf) {
+    if (!surf) return;
+#ifdef HAVE_JETSON_NVMM
+    NvBufSurfaceDestroy((NvBufSurface*)surf);
+#else
+    cudaFree(surf);
+#endif
+}
+
+uchar4* nvbuffer_map_to_cuda(void* surf, int* out_pitch) {
+#ifdef HAVE_JETSON_NVMM
+    NvBufSurface* s = (NvBufSurface*)surf;
+    if (NvBufSurfaceMap(s, 0, -1, NVBUF_MAP_READ_WRITE) != 0) return nullptr;
+    NvBufSurfaceSyncForDevice(s, 0, -1);
+    *out_pitch = s->surfaceList[0].pitch;
+    return (uchar4*)s->surfaceList[0].dataPtr;
+#else
+    // On x86, it's already a device pointer from cudaMalloc
+    *out_pitch = 1000 * 4; 
+    return (uchar4*)surf;
+#endif
+}
+
+void nvbuffer_unmap_from_cuda(void* surf) {
+#ifdef HAVE_JETSON_NVMM
+    NvBufSurface* s = (NvBufSurface*)surf;
+    NvBufSurfaceSyncForDevice(s, 0, -1);
+    NvBufSurfaceUnMap(s, 0, -1);
+#endif
+}
+
+GstBuffer* nvbuffer_wrap_as_gstbuffer(void* surf, int w, int h) {
+    if (!surf) return nullptr;
+#ifdef HAVE_JETSON_NVMM
+    // In Jetson NVMM, a GstBuffer's data is just the NvBufSurface pointer
+    GstBuffer* buffer = gst_buffer_new_wrapped_full((GstMemoryFlags)0, (gpointer)surf, sizeof(NvBufSurface), 
+                                                   0, sizeof(NvBufSurface), nullptr, nullptr);
+    return buffer;
+#else
+    // On x86, we still need to copy from GPU to CPU because x264enc needs Host memory
+    GstBuffer* buffer = gst_buffer_new_allocate(nullptr, w * h * 4, nullptr);
+    GstMapInfo map;
+    gst_buffer_map(buffer, &map, GST_MAP_WRITE);
+    cudaMemcpy(map.data, surf, w * h * 4, cudaMemcpyDeviceToHost);
+    gst_buffer_unmap(buffer, &map);
+    return buffer;
+#endif
+}
+
 // --- GStreamer & NVMM Specific Implementation ---
 #ifdef HAVE_JETSON_NVMM
-#include <gst/gst.h>
 
 // 单路处理 (预留，暂时未使用)
 bool nvbuffer_cuda_process(GstBuffer *buffer, int width, int height, int brighten_value) {
@@ -205,7 +288,7 @@ bool nvbuffer_cuda_process_multi(GstBuffer **buffers, int width, int height, Gst
     // 4. 清理与解映射 (必须严格执行，否则会导致内存泄漏或死锁)
     
     // 清理输入
-    for (int i = 0; i < input_ptrs.size(); i++) { // Only unmap successfully mapped ones
+    for (int i = 0; i < (int)input_ptrs.size(); i++) { // Only unmap successfully mapped ones
         NvBufSurface *surf = (NvBufSurface *)in_maps[i].data;
         NvBufSurfaceUnMap(surf, 0, -1);
         gst_buffer_unmap(buffers[i], &in_maps[i]);

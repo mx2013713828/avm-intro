@@ -35,7 +35,8 @@ static const int END_FRAME = 303;
 
 // 显存资源
 static uchar4* d_ins[4] = {nullptr}; // for Sim
-static uchar4* d_out = nullptr;      // Common output buffer
+static void* g_out_surf = nullptr;   // Zero-copy output surface
+static int g_out_pitch = 0;          // Output surface pitch
 
 // 线程同步 (用于 Real Mode: Capture Thread -> RTSP Thread)
 static std::mutex g_frame_mutex;
@@ -161,7 +162,12 @@ static void process_simulation_frame() {
     if (current_frame_idx > END_FRAME) current_frame_idx = START_FRAME;
 
     auto start = std::chrono::high_resolution_clock::now();
-    stitching_process(d_out, OUT_WIDTH * sizeof(uchar4), input_ptrs, g_camera_gains);
+    
+    int pitch = 0;
+    uchar4* d_out_ptr = nvbuffer_map_to_cuda(g_out_surf, &pitch);
+    stitching_process(d_out_ptr, pitch, input_ptrs, g_camera_gains);
+    nvbuffer_unmap_from_cuda(g_out_surf);
+    
     cudaDeviceSynchronize();
     auto end = std::chrono::high_resolution_clock::now();
     
@@ -232,7 +238,12 @@ static GstFlowReturn on_capture_sample(GstAppSink *appsink, gpointer user_data) 
              // stitching_process 接受 out_pitch。
              // 对于 d_out (cudaMalloc), pitch = width * 4。
              auto start = std::chrono::high_resolution_clock::now();
-             stitching_process(d_out, OUT_WIDTH * sizeof(uchar4), input_ptrs, g_camera_gains);
+             
+             int pitch = 0;
+             uchar4* d_out_ptr = nvbuffer_map_to_cuda(g_out_surf, &pitch);
+             stitching_process(d_out_ptr, pitch, input_ptrs, g_camera_gains);
+             nvbuffer_unmap_from_cuda(g_out_surf);
+             
              cudaDeviceSynchronize();
              auto end = std::chrono::high_resolution_clock::now();
              
@@ -283,13 +294,9 @@ static void on_rtsp_need_data(GstElement *appsrc, guint unused, gpointer user_da
         }
     }
 
-    // 2. 将 d_out (GPU) 拷贝回 CPU 发送给 RTSP (x264enc)
-    GstBuffer *buffer = gst_buffer_new_allocate(nullptr, OUT_WIDTH * OUT_HEIGHT * 4, nullptr);
-    GstMapInfo map;
-    gst_buffer_map(buffer, &map, GST_MAP_WRITE);
-    cudaMemcpy(map.data, d_out, OUT_WIDTH * OUT_HEIGHT * sizeof(uchar4), cudaMemcpyDeviceToHost);
-    gst_buffer_unmap(buffer, &map);
-
+    // 2. 将 d_out (GPU) 包装成 GstBuffer 推送 (Zero-copy on Jetson)
+    GstBuffer *buffer = nvbuffer_wrap_as_gstbuffer(g_out_surf, OUT_WIDTH, OUT_HEIGHT);
+    
     GST_BUFFER_PTS(buffer) = timestamp;
     GST_BUFFER_DURATION(buffer) = gst_util_uint64_scale_int(1, GST_SECOND, FPS);
     timestamp += GST_BUFFER_DURATION(buffer);
@@ -322,6 +329,16 @@ static GstRTSPMediaFactory* create_rtsp_factory() {
     GstRTSPMediaFactory *factory = gst_rtsp_media_factory_new();
     // 统一使用 appsrc，无论是 Sim 还是 Real。
     // 这解耦了 RTSP 传输层和图像生成层。
+#ifdef HAVE_JETSON_NVMM
+    char* launch_str = g_strdup_printf(
+        "( appsrc name=mysrc is-live=true format=GST_FORMAT_TIME "
+        "caps=\"video/x-raw(memory:NVMM),format=RGBA,width=%d,height=%d,framerate=%d/1\" ! "
+        "nvvideoconvert ! video/x-raw(memory:NVMM),format=NV12 ! "
+        "nvv4l2h264enc bitrate=8000000 insert-sps-pps=true iframeinterval=30 preset-level=1 ! "
+        "rtph264pay name=pay0 pt=96 )",
+        OUT_WIDTH, OUT_HEIGHT, FPS
+    );
+#else
     char* launch_str = g_strdup_printf(
         "( appsrc name=mysrc is-live=true format=GST_FORMAT_TIME "
         "caps=\"video/x-raw,format=RGBA,width=%d,height=%d,framerate=%d/1\" ! "
@@ -330,6 +347,7 @@ static GstRTSPMediaFactory* create_rtsp_factory() {
         "rtph264pay name=pay0 pt=96 )",
         OUT_WIDTH, OUT_HEIGHT, FPS
     );
+#endif
 
     gst_rtsp_media_factory_set_launch(factory, launch_str);
     g_free(launch_str);
@@ -363,7 +381,12 @@ int main(int argc, char *argv[]) {
         return -1;
     }
 
-    cudaMalloc(&d_out, OUT_WIDTH * OUT_HEIGHT * sizeof(uchar4));
+    g_out_surf = nvbuffer_allocate_output(OUT_WIDTH, OUT_HEIGHT, &g_out_pitch);
+    if (!g_out_surf) {
+        printf("Error: Failed to allocate output surface\n");
+        return -1;
+    }
+
     if (is_simulation) {
         for(int i=0; i<4; i++) cudaMalloc(&d_ins[i], IN_WIDTH * IN_HEIGHT * sizeof(uchar4));
     } else {
@@ -430,7 +453,7 @@ int main(int argc, char *argv[]) {
     g_main_loop_run(main_loop);
 
     cuda_cleanup();
-    if (d_out) cudaFree(d_out);
+    if (g_out_surf) nvbuffer_free_output(g_out_surf);
     for(int i=0; i<4; i++) if (d_ins[i]) cudaFree(d_ins[i]);
     
     return 0;
