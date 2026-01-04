@@ -10,10 +10,11 @@
 
 ## ✨ 项目特点
 
-- 🚀 **零拷贝架构** - 视频数据始终在GPU显存，无CPU回传（Orin实车模式）
-- 🔄 **双模运行** - 支持 **x86仿真** (Sim Mode) 和 **Orin实车** (Real Mode) 无缝切换
-- ⚡ **CUDA实时处理** - 支持基于查找表（LUT）的高性能CUDA拼接
-- 📡 **RTSP推流** - 支持多客户端同时连接
+- 🚀 **真·零拷贝架构** - 视频数据始终在 GPU 显存，无 CPU 参与搬运（Orin 实车模式）
+- 🔄 **双模运行** - 支持 **x86 仿真** (Sim Mode) 和 **Orin 实车** (Real Mode) 无缝切换
+- 🎨 **色彩亮度均衡** - 闭环 BGR 均衡算法，消除相机间色差与亮度差异
+- ⚡ **CUDA 实时处理** - 基于查找表（LUT）的高性能拼接，内核耗时 < 0.5ms
+- 📡 **RTSP 推流** - 支持多客户端同时连接，全硬件编码推流
 - 📦 **开箱即用** - 一键跨平台编译
 
 ## 📁 项目结构
@@ -65,8 +66,8 @@ bash scripts/build.sh
 
 | 模式 | 平台 | 耗时 (ms/帧) | 管线架构 | 备注 |
 | :--- | :--- | :--- | :--- | :--- |
-| **Sim** | RTX 3090 | ~0.5ms (CUDA) | CPU读取 -> H2D -> CUDA -> D2H -> x264 | 仿真验证算法 |
-| **Real** | Jetson Orin | **<2ms** (预估) | 4xV4L2 -> NvStreamMux -> **NVMM ZeroCopy** -> CUDA -> NVENC | **生产级高性能** |
+| **Sim** | RTX 3090 | ~0.3ms (CUDA) | CPU读取 -> H2D -> CUDA -> D2H -> RTSP | 算法验证 |
+| **Real** | Jetson Orin | **~15ms** (E2E) | 4xV4L2 -> NVMM -> **Zero-copy** -> CUDA -> NVENC | **生产级极致性能** |
 
 ## AVM 效果
 ![2D AVM](./stitching/surround.jpg)

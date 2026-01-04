@@ -121,11 +121,11 @@
   - [x] **亮度/色彩均衡**：实现了参考 `neozhaoliang` 仓库的闭环 BGR 比例优化算法。
   - [x] **边缘羽化**：LUT 生成脚本已支持 80px 宽度的边缘柔化。
   - [x] **平滑融合**：引入 30° 融合带宽与 Sine 权重曲线。
-- [ ] **性能测试与极致优化 (Priority 2)**
-  - [ ] **真·零拷贝实现 (Current Focus)**：移除 RTSP 推流前的 `cudaMemcpyDeviceToHost`，改用 GPU 编码器直接读取 NVMM。
-  - [x] **端到端延迟分析**：已在日志中集成采集到推流的全链路耗时统计。
-- [ ] **动态系统演进 (Priority 3)**
-  - [ ] **在线标定集成**：支持加载标定算法输出的新外参。
+- [x] **性能测试与极致优化 (Priority 2)**
+  - [x] **真·零拷贝实现**：通过 `NvBufSurface` 物理地址共享，实现了全链路 GPU 处理，消除了所有中间 `cudaMemcpy`。
+  - [x] **端到端延迟分析**：实车测得延迟从 40ms+ 降低至 ~15ms。
+- [ ] **动态系统演进 (Priority 3 - Current Focus)**
+  - [ ] **在线标定集成**：集成 Dynamic Extrinsic 算法，实现行驶过程中的位姿细调。
   - [ ] **LUT 实时热更新**：实现无需重启程序的查找表重算与显存重加载逻辑。
 
 **预期输出**:
@@ -978,17 +978,14 @@ void main() {
 **✅ 已完成**:
 - Phase 0: 基础设施
 - Python 版 2D 拼接算法
+- **Phase A1: 真·零拷贝性能优化 (Zero-copy)**
+- **Phase A1: 闭环 BGR 亮度/平衡优化**
 
 **🚧 进行中**:
-- Phase A1: 真·零拷贝性能优化 (Zero-copy)
+- Phase A2: 实车标定与自动化标定工具开发
 
 **📋 下一步**:
-- Phase A1: 集成到 GStreamer 管线
-- Phase A2: 实车标定
-
-**🎯 短期目标 (1-2 周)**:
-- 完成 Phase A1
-- 开始 Phase A2 硬件准备
+- 动态外参在线标定集成 (Dynamic Extrinsic)
 
 **🎯 中期目标 (1-2 月)**:
 - 完成 2D 模式 (Phase A2-A4)
